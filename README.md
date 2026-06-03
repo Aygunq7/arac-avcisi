@@ -35,3 +35,10 @@ Telefon sadece ekran değildir; telefondan arama oluşturabilir, kaynak/marka/mo
 ## Hızlı kurulum
 
 Detaylar için `BULUT_KURULUM.md` dosyasını aç.
+
+
+## Kontrol sıklığı
+
+Bu sürümde kontrol süresi sabit 4 saat değildir. Takip oluştururken **Kaç saatte bir kontrol edilsin?** alanından 1, 2, 3, 4, 6, 8, 12, 24, 48 veya 72 saat seçilebilir. Kayıtlı takiplerde bu süre sonradan **Süreyi kaydet** butonuyla değiştirilebilir.
+
+Arka plandaki zamanlayıcı varsayılan olarak 15 dakikada bir uyanır ve süresi dolan takipleri kontrol eder. İstenirse Render Environment bölümüne `SCHEDULER_TICK_MINUTES` eklenerek bu uyanma aralığı değiştirilebilir.

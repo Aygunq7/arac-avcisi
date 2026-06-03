@@ -1,6 +1,21 @@
 let OPTIONS = null;
 const $ = (id) => document.getElementById(id);
 
+function intervalChoices() {
+  return (OPTIONS && OPTIONS.interval_choices) ? OPTIONS.interval_choices : [1, 2, 3, 4, 6, 8, 12, 24, 48, 72];
+}
+function intervalLabel(h) {
+  h = Number(h || 4);
+  if (h < 24) return `${h} saatte bir`;
+  const d = h / 24;
+  return Number.isInteger(d) ? `${d} günde bir` : `${h} saatte bir`;
+}
+function intervalSelectHtml(id, selected) {
+  return `<select id="${id}" class="compact-select">` + intervalChoices().map(h =>
+    `<option value="${h}" ${Number(selected || OPTIONS.default_interval_hours || 4) === Number(h) ? 'selected' : ''}>${intervalLabel(h)}</option>`
+  ).join('') + `</select>`;
+}
+
 function toast(msg) {
   const t = $('toast');
   t.textContent = msg;
@@ -28,6 +43,8 @@ function fillOptions() {
   city.innerHTML = OPTIONS.cities.map(c => `<option>${c}</option>`).join('');
   if (OPTIONS.cities.includes('Kocaeli')) city.value = 'Kocaeli';
   fillModels();
+  const interval = $('check_interval_hours');
+  interval.innerHTML = intervalChoices().map(h => `<option value="${h}" ${Number(OPTIONS.default_interval_hours || 4) === Number(h) ? 'selected' : ''}>${intervalLabel(h)}</option>`).join('');
   const sources = $('sources');
   sources.innerHTML = OPTIONS.sources.map(s => `
     <label class="source-tile"><input type="checkbox" value="${s.key}" checked> <span>${s.name}</span></label>
@@ -55,6 +72,7 @@ async function createSearch() {
     fuel: $('fuel').value,
     gear: $('gear').value,
     sources: selectedSources(),
+    check_interval_hours: Number($('check_interval_hours').value || OPTIONS.default_interval_hours || 4),
     email_to: $('email_to').value.trim(),
     telegram_chat_id: $('telegram_chat_id').value.trim()
   };
@@ -85,6 +103,7 @@ async function loadSearches() {
       <span class="badge">${s.brand} ${s.model}</span>
       <span class="badge">${s.city || 'Tüm Türkiye'}</span>
       <span class="badge">${s.active ? 'Aktif' : 'Pasif'}</span>
+      <span class="badge">${intervalLabel(s.check_interval_hours || OPTIONS.default_interval_hours || 4)}</span>
       <small>Kaynaklar: ${s.sources.join(', ')}</small>
       <small>Son kontrol: ${s.last_checked_at || 'Henüz yok'}</small>
       <small>${s.last_status || ''}</small>
@@ -92,6 +111,10 @@ async function loadSearches() {
         <button class="ghost" onclick="runNow(${s.id})">Şimdi kontrol et</button>
         <button class="ghost" onclick="toggle(${s.id})">Aktif/Pasif</button>
         <button class="ghost" onclick="showItems(${s.id})">Bulunanları göster</button>
+        <div class="interval-editor">
+          ${intervalSelectHtml(`interval-${s.id}`, s.check_interval_hours || OPTIONS.default_interval_hours || 4)}
+          <button class="ghost" onclick="updateInterval(${s.id})">Süreyi kaydet</button>
+        </div>
       </div>
       <div id="items-${s.id}" class="list" style="margin-top:10px"></div>
     </div>
@@ -106,6 +129,16 @@ async function runNow(id) {
 }
 async function toggle(id) {
   await api(`/api/searches/${id}/toggle`, {method:'POST'});
+  await loadSearches();
+}
+async function updateInterval(id) {
+  const value = Number($(`interval-${id}`).value);
+  await api(`/api/searches/${id}/interval`, {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({check_interval_hours: value})
+  });
+  toast(`Kontrol sıklığı ${intervalLabel(value)} olarak kaydedildi.`);
   await loadSearches();
 }
 async function showItems(id) {

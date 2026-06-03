@@ -94,3 +94,10 @@ Chrome > üç nokta > Ana ekrana ekle / Uygulamayı yükle
 - İlk arama başlangıç kaydıdır; sonraki kontroller yeni ilan ve fiyat düşüşü bildirir.
 - Bazı siteler bot erişimini kısıtlayabilir. Bu durumda o site için özel adaptör veya resmi veri kaynağı gerekir.
 - Facebook Marketplace giriş ve erişim kısıtları nedeniyle her bulut ortamında otomatik okunmayabilir.
+
+
+## Kontrol sıklığı
+
+Bu sürümde kontrol süresi sabit 4 saat değildir. Takip oluştururken **Kaç saatte bir kontrol edilsin?** alanından 1, 2, 3, 4, 6, 8, 12, 24, 48 veya 72 saat seçilebilir. Kayıtlı takiplerde bu süre sonradan **Süreyi kaydet** butonuyla değiştirilebilir.
+
+Arka plandaki zamanlayıcı varsayılan olarak 15 dakikada bir uyanır ve süresi dolan takipleri kontrol eder. İstenirse Render Environment bölümüne `SCHEDULER_TICK_MINUTES` eklenerek bu uyanma aralığı değiştirilebilir.

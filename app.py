@@ -7,7 +7,7 @@ import hashlib
 import smtplib
 import unicodedata
 from email.mime.text import MIMEText
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from urllib.parse import quote_plus, urljoin
 
 import requests
@@ -26,7 +26,8 @@ DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.sqlite3")
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-secret")
 
-CHECK_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4"))
+DEFAULT_CHECK_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4"))
+SCHEDULER_TICK_MINUTES = int(os.getenv("SCHEDULER_TICK_MINUTES", "15"))
 
 # Hazır araç kataloğu. Listeyi static/app.js de API üzerinden okur.
 CAR_CATALOG = {
@@ -109,6 +110,7 @@ def init_db():
             sources_json TEXT NOT NULL,
             email_to TEXT,
             telegram_chat_id TEXT,
+            check_interval_hours INTEGER DEFAULT 4,
             baseline_done INTEGER DEFAULT 0,
             active INTEGER DEFAULT 1,
             created_at TEXT NOT NULL,
@@ -151,8 +153,41 @@ def init_db():
         );
         """
     )
+    # Eski veritabanında yeni kolon yoksa otomatik ekle.
+    cols = [row[1] for row in cur.execute("PRAGMA table_info(searches)").fetchall()]
+    if "check_interval_hours" not in cols:
+        cur.execute("ALTER TABLE searches ADD COLUMN check_interval_hours INTEGER DEFAULT 4")
     conn.commit()
     conn.close()
+
+
+def safe_interval_hours(value, default=None):
+    if default is None:
+        default = DEFAULT_CHECK_INTERVAL_HOURS
+    try:
+        interval = int(value)
+    except (TypeError, ValueError):
+        interval = int(default)
+    return max(1, min(interval, 168))
+
+
+def parse_iso_datetime(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def search_is_due(search):
+    interval = safe_interval_hours(search.get("check_interval_hours"), DEFAULT_CHECK_INTERVAL_HOURS)
+    last_checked = parse_iso_datetime(search.get("last_checked_at"))
+    if last_checked is None:
+        return True
+    if last_checked.tzinfo is None:
+        last_checked = last_checked.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= last_checked + timedelta(hours=interval)
 
 
 def tr_slug(text):
@@ -455,14 +490,17 @@ def check_search(search_id, baseline=False):
 
 def scheduled_job():
     conn = db()
-    rows = conn.execute("SELECT id FROM searches WHERE active=1").fetchall()
+    rows = conn.execute("SELECT * FROM searches WHERE active=1").fetchall()
+    searches = [dict(row) for row in rows]
     conn.close()
-    for row in rows:
+    for search in searches:
+        if not search_is_due(search):
+            continue
         try:
-            check_search(row["id"], baseline=False)
+            check_search(search["id"], baseline=False)
             time.sleep(2)
         except Exception as exc:
-            print(f"Zamanlanmış arama hatası: {row['id']} {exc}")
+            print(f"Zamanlanmış arama hatası: {search['id']} {exc}")
 
 
 @app.route("/")
@@ -472,7 +510,13 @@ def index():
 
 @app.route("/api/options")
 def options():
-    return jsonify({"catalog": CAR_CATALOG, "cities": CITIES, "sources": SOURCE_DEFS})
+    return jsonify({
+        "catalog": CAR_CATALOG,
+        "cities": CITIES,
+        "sources": SOURCE_DEFS,
+        "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
+        "interval_choices": [1, 2, 3, 4, 6, 8, 12, 24, 48, 72],
+    })
 
 
 @app.route("/api/searches", methods=["GET"])
@@ -499,14 +543,15 @@ def create_search():
     name = payload.get("name") or f"{brand} {model}"
     conn = db()
     cur = conn.execute(
-        """INSERT INTO searches(name,brand,model,city,year_min,year_max,price_min,price_max,km_max,fuel,gear,sources_json,email_to,telegram_chat_id,created_at,last_status)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO searches(name,brand,model,city,year_min,year_max,price_min,price_max,km_max,fuel,gear,sources_json,email_to,telegram_chat_id,check_interval_hours,created_at,last_status)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             name, brand, model, payload.get("city") or "Tüm Türkiye",
             payload.get("year_min") or None, payload.get("year_max") or None,
             payload.get("price_min") or None, payload.get("price_max") or None,
             payload.get("km_max") or None, payload.get("fuel") or "Farketmez", payload.get("gear") or "Farketmez",
             json.dumps(sources, ensure_ascii=False), payload.get("email_to") or "", payload.get("telegram_chat_id") or "",
+            safe_interval_hours(payload.get("check_interval_hours")),
             now_iso(), "İlk kayıt oluşturuldu. Başlangıç araması yapılıyor.",
         ),
     )
@@ -552,9 +597,32 @@ def toggle_search(search_id):
     return jsonify({"ok": True, "active": new_state})
 
 
+@app.route("/api/searches/<int:search_id>/interval", methods=["POST"])
+def update_interval(search_id):
+    payload = request.get_json(force=True)
+    interval = safe_interval_hours(payload.get("check_interval_hours"))
+    conn = db()
+    row = conn.execute("SELECT id FROM searches WHERE id=?", (search_id,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"ok": False, "message": "Takip bulunamadı"}), 404
+    conn.execute(
+        "UPDATE searches SET check_interval_hours=?, last_status=? WHERE id=?",
+        (interval, f"Kontrol sıklığı {interval} saat olarak güncellendi.", search_id),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True, "check_interval_hours": interval})
+
+
 @app.route("/health")
 def health():
-    return jsonify({"ok": True, "time": now_iso(), "interval_hours": CHECK_INTERVAL_HOURS})
+    return jsonify({
+        "ok": True,
+        "time": now_iso(),
+        "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
+        "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
+    })
 
 
 _scheduler = None
@@ -565,7 +633,7 @@ def start_scheduler():
     scheduler.add_job(
         scheduled_job,
         "interval",
-        hours=CHECK_INTERVAL_HOURS,
+        minutes=SCHEDULER_TICK_MINUTES,
         id="arac-avcisi",
         replace_existing=True,
         max_instances=1,

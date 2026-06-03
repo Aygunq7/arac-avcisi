@@ -89,6 +89,17 @@ button {
 .item strong { display: block; margin-bottom: 5px; }
 .item small { color: var(--muted); display: block; margin-top: 5px; line-height: 1.45; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.interval-editor { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; margin-top: 4px; }
+.compact-select { width: min(220px, 100%); min-height: 46px; }
+.hint-box {
+  min-height: 46px;
+  border-radius: 14px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  padding: 11px 13px;
+  font-size: 13px;
+  line-height: 1.45;
+}
 a { color: #7dd3fc; text-decoration: none; }
 .badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); margin-right: 6px; }
 #toast {

@@ -16,7 +16,7 @@
         <h1>Araç Avcısı</h1>
         <p class="muted">Siteleri ve araçları hazır listeden seç. İlk arama kayıt olur, sonra yeni ilan ve fiyat düşüşü takip edilir.</p>
       </div>
-      <div class="status-pill" id="health">4 saatte bir kontrol</div>
+      <div class="status-pill" id="health">Kontrol saatini sen seç</div>
     </header>
 
     <section class="card">
@@ -75,6 +75,14 @@
 
       <h3>Siteleri seç</h3>
       <div class="sources" id="sources"></div>
+
+      <h3>Kontrol zamanı</h3>
+      <div class="grid two">
+        <label>Kaç saatte bir kontrol edilsin?
+          <select id="check_interval_hours"></select>
+        </label>
+        <div class="hint-box">Seçtiğin süre dolunca sistem otomatik kontrol eder. İstersen kayıtlı takiplerde sonradan değiştirebilirsin.</div>
+      </div>
 
       <h3>Bildirim</h3>
       <div class="grid two">
