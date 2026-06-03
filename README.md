@@ -58,3 +58,11 @@ https://senin-linkin.onrender.com/health
 - Her ilan için site adı, başlık, fiyat, yıl, km, ilk/son görülme zamanı ve direkt ilan linki gösterilir.
 - Link kopyalama butonu eklendi.
 - Takip kartında toplam bulunan ilan ve site bazlı ilan sayıları görünür.
+
+
+## v7-link-liste-duzeltme
+
+- Site aç butonları boş sayfa yerine daha geniş marka/model sayfasına gider.
+- Bütün kaynaklarda yedek arama modu var. Direkt site liste vermezse Bing site içi sonuçlarından ilan yakalamaya çalışır.
+- Arabam, Sahibinden ve Otoplus için path tabanlı link üretimi düzeltildi.
+- /health çıktısında version v7-link-liste-duzeltme görünmelidir.

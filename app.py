@@ -1095,11 +1095,330 @@ def update_interval(search_id):
     return jsonify({"ok": True, "check_interval_hours": interval})
 
 
+
+
+# -----------------------------------------------------------------------------
+# v7: Site linkleri ve liste yakalama düzeltmeleri
+# -----------------------------------------------------------------------------
+# Önceki sürümlerde bazı kaynaklarda arama parametresi sitenin güncel URL yapısına
+# uymadığı için "sonuç bulunamadı" sayfası açılıyordu. Bu blok, ana uygulamayı
+# değiştirmeden fonksiyonları daha geniş ve dayanıklı link mantığıyla geçersiz kılar.
+
+SOURCE_DEFS = [
+    {
+        "key": "sahibinden", "name": "Sahibinden", "base": "https://www.sahibinden.com",
+        "template": "", "open_template": "", "mode": "guarded", "backup": True,
+        "note": "Geniş marka/model linki + Bing yedek arama. 429/403 gelirse beklemeye alınır."
+    },
+    {
+        "key": "arabam", "name": "Arabam", "base": "https://www.arabam.com",
+        "template": "", "open_template": "", "mode": "direct", "backup": True,
+    },
+    {
+        "key": "letgo", "name": "Letgo", "base": "https://www.letgo.com",
+        "template": "", "open_template": "", "mode": "direct", "backup": True,
+    },
+    {
+        "key": "facebook", "name": "Facebook Marketplace", "base": "https://www.facebook.com",
+        "template": "", "open_template": "", "mode": "guarded", "backup": True,
+        "note": "Facebook çoğu zaman giriş ister. Direkt link açılır, ayrıca yedek arama verilir."
+    },
+    {
+        "key": "vavacars", "name": "VavaCars", "base": "https://tr.vava.cars",
+        "template": "", "open_template": "", "mode": "direct", "backup": True,
+    },
+    {
+        "key": "otoplus", "name": "Otoplus", "base": "https://www.otoplus.com",
+        "template": "", "open_template": "", "mode": "guarded", "backup": True,
+    },
+    {
+        "key": "otokoc", "name": "Otokoç 2. El", "base": "https://www.otokocikinciel.com",
+        "template": "", "open_template": "", "mode": "guarded", "backup": True,
+    },
+    {
+        "key": "arabasepeti", "name": "Araba Sepeti", "base": "https://www.arabasepeti.com",
+        "template": "", "open_template": "", "mode": "direct", "backup": True,
+    },
+    {
+        "key": "arabalar", "name": "Arabalar.com", "base": "https://www.arabalar.com.tr",
+        "template": "", "open_template": "", "mode": "guarded", "backup": True,
+    },
+]
+
+PACKAGE_SLUG_OVERRIDES = {
+    ("Honda", "Civic", "1.6 Eco Elegance"): "1.6i-vtec-eco-elegance",
+    ("Honda", "Civic", "1.6 Eco Executive"): "1.6i-vtec-eco-executive",
+    ("Honda", "Civic", "1.6 i-VTEC Elegance"): "1.6i-vtec-elegance",
+    ("Honda", "Civic", "1.6 i-VTEC Executive"): "1.6i-vtec-executive",
+    ("Honda", "Civic", "1.5 VTEC Turbo Elegance"): "1.5-vtec-turbo-elegance",
+    ("Honda", "Civic", "1.5 VTEC Turbo Executive+"): "1.5-vtec-turbo-executive",
+}
+
+
+def _city_slug(search):
+    city = (search.get("city") or "Tüm Türkiye").strip()
+    if not city or city == "Tüm Türkiye":
+        return ""
+    return tr_slug(city)
+
+
+def _brand_model_slug(search):
+    return f"{tr_slug(search.get('brand', ''))}-{tr_slug(search.get('model', ''))}".strip("-")
+
+
+def _package_slug(search):
+    package_name = (search.get("package_name") or "Farketmez").strip()
+    if not package_name or package_name == "Farketmez":
+        return ""
+    key = ((search.get("brand") or "").strip(), (search.get("model") or "").strip(), package_name)
+    return PACKAGE_SLUG_OVERRIDES.get(key) or tr_slug(package_name)
+
+
+def _exact_query_text(search):
+    # Site dışı yedek aramalarda olabildiğince net sorgu kullanılır.
+    parts = [search.get("brand"), search.get("model")]
+    package_name = (search.get("package_name") or "Farketmez").strip()
+    if package_name and package_name != "Farketmez":
+        parts.append(package_name)
+    if search.get("city") and search.get("city") != "Tüm Türkiye":
+        parts.append(search.get("city"))
+    if search.get("year_min"):
+        parts.append(str(search.get("year_min")))
+    if search.get("price_max"):
+        parts.append(f"{search.get('price_max')} TL altı")
+    return " ".join(str(x) for x in parts if x)
+
+
+def build_search_url(source_def, search, open_url=False):
+    """v7 link üretici.
+    Direkt butonlarda geniş marka/model sayfaları kullanılır; böylece siteye gidince
+    boş filtre sayfasına düşme ihtimali azalır. Kesin paket ve şehir araması yedek
+    arama bağlantısından yapılır.
+    """
+    key = source_def.get("key")
+    q = quote_plus(_exact_query_text(search))
+    bm = _brand_model_slug(search)
+    city = _city_slug(search)
+    pkg = _package_slug(search)
+
+    if key == "sahibinden":
+        # Sahibinden en stabil olarak marka-model ve şehir path yapısında açılıyor.
+        url = f"https://www.sahibinden.com/{bm}"
+        if city:
+            url += f"/{city}"
+        return url
+
+    if key == "arabam":
+        # Arabam tarafında kategori URL'leri path tabanlıdır. Paket exact ise çok daraltabilir,
+        # bu yüzden kullanıcı butonu geniş marka/model açar; takip motoru ve yedek arama paketi arar.
+        url = f"https://www.arabam.com/ikinci-el/otomobil/{bm}"
+        if city:
+            url += f"-{city}"
+        return url
+
+    if key == "otoplus":
+        return f"https://www.otoplus.com/{tr_slug(search.get('brand',''))}/{tr_slug(search.get('model',''))}"
+
+    if key == "otokoc":
+        return "https://www.otokocikinciel.com/ikinci-el-araba"
+
+    if key == "vavacars":
+        return f"https://tr.vava.cars/?q={q}"
+
+    if key == "letgo":
+        return f"https://www.letgo.com/tr-tr/ara?q={q}"
+
+    if key == "facebook":
+        return f"https://www.facebook.com/marketplace/search/?query={q}"
+
+    if key == "arabasepeti":
+        return f"https://www.arabasepeti.com/ikinci-el-araclar?search={q}"
+
+    if key == "arabalar":
+        return f"https://www.arabalar.com.tr/ikinci-el?kelime={q}"
+
+    return source_def.get("base", "")
+
+
+def build_backup_search_url(source_def, search):
+    host = urlparse(source_def.get("base", "")).netloc.replace("www.", "")
+    q = f"site:{host} {_exact_query_text(search)} ikinci el fiyat km"
+    return "https://www.bing.com/search?q=" + quote_plus(q)
+
+
+def _price_from_block(text):
+    return extract_price(text or "")
+
+
+def _result_from_text_block(source_def, title, url, text):
+    title = re.sub(r"\s+", " ", title or "").strip()
+    text = re.sub(r"\s+", " ", text or title).strip()
+    if not title:
+        title = text[:160]
+    return {
+        "source_key": source_def["key"],
+        "source_name": source_def["name"],
+        "title": title[:220] or f"{source_def['name']} ilanı",
+        "url": url.split("#")[0],
+        "price": _price_from_block(text),
+        "year": extract_year(text),
+        "km": extract_km(text),
+        "city": None,
+    }
+
+
+def parse_search_page(source_def, html, search, limit=50):
+    soup = BeautifulSoup(html or "", "html.parser")
+    results = []
+    seen = set()
+    base_host = urlparse(source_def.get("base", "")).netloc.replace("www.", "")
+
+    # Önce güçlü adaylar: list/card/article kapsayıcıları.
+    candidates = []
+    selectors = ["article", "li", "div[class*='card']", "div[class*='listing']", "div[class*='vehicle']", "tr"]
+    for sel in selectors:
+        candidates.extend(soup.select(sel))
+    if not candidates:
+        candidates = soup.find_all("a", href=True)
+
+    for block in candidates:
+        a = block.find("a", href=True) if hasattr(block, "find") else None
+        if a is None and getattr(block, "name", "") == "a" and block.get("href"):
+            a = block
+        if not a:
+            continue
+        href = (a.get("href") or "").strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:")):
+            continue
+        full_url = urljoin(source_def["base"], href).split("#")[0]
+        host = urlparse(full_url).netloc.replace("www.", "")
+        if base_host and base_host not in host:
+            continue
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        title = a.get_text(" ", strip=True)
+        block_text = block.get_text(" ", strip=True) if hasattr(block, "get_text") else title
+        # Çok genel menü linklerini ele.
+        low = normalize_text(title + " " + full_url)
+        if any(bad in low for bad in ["giris yap", "uye ol", "favori", "karsilastir", "yardim", "blog"]):
+            continue
+        item = _result_from_text_block(source_def, title, full_url, block_text)
+        if len(item["title"]) < 4:
+            continue
+        if passes_filters(item, search):
+            results.append(item)
+        if len(results) >= limit:
+            break
+    return results
+
+
+def fetch_bing_backup(source_def, search, limit=30):
+    url = build_backup_search_url(source_def, search)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+    results = []
+    try:
+        resp = requests.get(url, headers=headers, timeout=25)
+        if resp.status_code >= 400:
+            return [], {"source": f"{source_def['name']} yedek arama", "url": url, "status": f"HTTP {resp.status_code}", "status_code": resp.status_code}
+        soup = BeautifulSoup(resp.text, "html.parser")
+        host = urlparse(source_def["base"]).netloc.replace("www.", "")
+        seen = set()
+        blocks = soup.select("li.b_algo") or soup.find_all("li") or soup.find_all("a", href=True)
+        for block in blocks:
+            a = block.find("a", href=True) if hasattr(block, "find") else None
+            if a is None and getattr(block, "name", "") == "a" and block.get("href"):
+                a = block
+            if not a:
+                continue
+            href = a.get("href", "")
+            # Bing bazen gerçek adresi u parametresine koyar.
+            if href.startswith("/ck/a"):
+                qs = parse_qs(urlparse(href).query)
+                if qs.get("u"):
+                    href = unquote(qs["u"][0])
+                    if href.startswith("a1"):
+                        href = href[2:]
+            if href.startswith("//"):
+                href = "https:" + href
+            if not href.startswith("http"):
+                continue
+            if host and host not in urlparse(href).netloc.replace("www.", ""):
+                continue
+            clean = href.split("#")[0]
+            if clean in seen:
+                continue
+            seen.add(clean)
+            title = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
+            block_text = block.get_text(" ", strip=True) if hasattr(block, "get_text") else title
+            item = _result_from_text_block({**source_def, "name": source_def["name"] + " / yedek"}, title, clean, block_text)
+            if passes_filters(item, search):
+                results.append(item)
+            if len(results) >= limit:
+                break
+        return results, {"source": f"{source_def['name']} yedek arama", "url": url, "status": "ok", "status_code": 200}
+    except Exception as exc:
+        return [], {"source": f"{source_def['name']} yedek arama", "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": None}
+
+
+def fetch_source(source_def, search, limit=50):
+    url = build_search_url(source_def, search)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+    }
+    status_code = None
+    try:
+        if source_def.get("mode") == "guarded":
+            time.sleep(1.2)
+        resp = requests.get(url, headers=headers, timeout=25, allow_redirects=True)
+        status_code = resp.status_code
+        direct_status = f"HTTP {resp.status_code}"
+        if resp.status_code < 400:
+            results = parse_search_page(source_def, resp.text, search, limit=limit)
+            if results:
+                return results, {"source": source_def["name"], "url": url, "status": f"{direct_status} / liste: {len(results)}", "status_code": resp.status_code}
+            # Sayfa açıldı ama JS/boş/çok dar filtre yüzünden yakalayamadıysa yedek ara.
+            if source_def.get("backup"):
+                backup_items, backup_log = fetch_bing_backup(source_def, search, limit=limit)
+                backup_log["primary_status"] = direct_status
+                backup_log["primary_status_code"] = resp.status_code
+                backup_log["status"] = f"{direct_status} / direkt liste yok / yedek: {backup_log.get('status','')}"
+                # 200 dönse bile yedek başarılıysa kaynağı soğutma moduna sokma.
+                backup_log["status_code"] = 200 if backup_items else resp.status_code
+                return backup_items, backup_log
+            return [], {"source": source_def["name"], "url": url, "status": f"{direct_status} / liste yok", "status_code": resp.status_code}
+
+        # Engel veya hata durumunda yedek arama.
+        if source_def.get("backup") and resp.status_code in (400, 403, 404, 429, 500, 502, 503, 504):
+            backup_items, backup_log = fetch_bing_backup(source_def, search, limit=limit)
+            backup_log["primary_status"] = direct_status
+            backup_log["primary_status_code"] = resp.status_code
+            backup_log["status"] = f"{direct_status} / yedek: {backup_log.get('status','')}"
+            backup_log["status_code"] = resp.status_code
+            return backup_items, backup_log
+        return [], {"source": source_def["name"], "url": url, "status": direct_status, "status_code": resp.status_code}
+    except Exception as exc:
+        # Bağlantı sıfırlanırsa da yedek arama dene.
+        if source_def.get("backup"):
+            backup_items, backup_log = fetch_bing_backup(source_def, search, limit=limit)
+            backup_log["primary_status"] = f"Hata: {exc.__class__.__name__}"
+            backup_log["status"] = f"Hata: {exc.__class__.__name__} / yedek: {backup_log.get('status','')}"
+            backup_log["status_code"] = 200 if backup_items else status_code
+            return backup_items, backup_log
+        return [], {"source": source_def["name"], "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": status_code}
+
+
 @app.route("/health")
 def health():
     return jsonify({
         "ok": True,
-        "version": "v6-liste-gorunumlu",
+        "version": "v7-link-liste-duzeltme",
         "time": now_iso(),
         "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
         "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
