@@ -84,3 +84,7 @@ Bu sistem şifre saklamaz ve CAPTCHA atlatmaz.
 GitHub'a yeni paketten `app.py`, `templates`, `static`, `README.md`, `BULUT_KURULUM.md` dosya/klasörlerini yükleyin. Deploy sonrası `/health` çıktısında `v6-liste-gorunumlu` görünmelidir.
 
 Bu sürümde arama sonucu yakalanan ilanlar takip kartı altında kaynak/site bazında listelenir. Araç başlığı, fiyat, yıl, km, ilan linki ve link kopyalama butonu görünür.
+
+
+## v8 notu
+Bu sürümde site aç butonlarının ana sayfaya düşmesi azaltıldı. Sahibinden, Arabam ve Otoplus için marka/model/paket URL yapısı düzeltildi; liste yakalama parserı genişletildi. Deploy sonrası /health içinde v8-link-ve-liste-net-duzeltme görünmelidir.

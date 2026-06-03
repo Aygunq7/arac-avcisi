@@ -66,3 +66,7 @@ https://senin-linkin.onrender.com/health
 - Bütün kaynaklarda yedek arama modu var. Direkt site liste vermezse Bing site içi sonuçlarından ilan yakalamaya çalışır.
 - Arabam, Sahibinden ve Otoplus için path tabanlı link üretimi düzeltildi.
 - /health çıktısında version v7-link-liste-duzeltme görünmelidir.
+
+
+## v8 notu
+Bu sürümde site aç butonlarının ana sayfaya düşmesi azaltıldı. Sahibinden, Arabam ve Otoplus için marka/model/paket URL yapısı düzeltildi; liste yakalama parserı genişletildi. Deploy sonrası /health içinde v8-link-ve-liste-net-duzeltme görünmelidir.

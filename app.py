@@ -1450,6 +1450,392 @@ def boot_app():
         _scheduler = start_scheduler()
 
 
+
+
+# -----------------------------------------------------------------------------
+# v8: Doğru site linkleri + daha sağlam liste yakalama
+# -----------------------------------------------------------------------------
+# Bu blok boot_app() çağrısından önce çalışır. Böylece Render ayağa kalkarken
+# yeni link üretici ve yeni parser aktif olur.
+
+V8_VERSION = "v8-link-ve-liste-net-duzeltme"
+
+SUV_MODELS = {
+    "Tiguan", "T-Roc", "Taigo", "Kuga", "Puma", "Compass", "Renegade", "Avenger",
+    "Tucson", "Bayon", "HR-V", "CR-V", "Sportage", "Qashqai", "Duster", "3008", "2008",
+    "C-HR", "RAV4", "T-Cross", "Kodiaq", "Kamiq", "Ateca"
+}
+
+SAHIBINDEN_FULL_SLUGS = {
+    ("Honda", "Civic", "Farketmez"): "honda-civic",
+    ("Honda", "Civic", "1.6 Eco Elegance"): "honda-civic-1.6i-vtec-eco-elegance",
+    ("Honda", "Civic", "1.6 Eco Executive"): "honda-civic-1.6i-vtec-eco-executive",
+    ("Honda", "Civic", "1.6 i-VTEC Elegance"): "honda-civic-1.6i-vtec-elegance",
+    ("Honda", "Civic", "1.6 i-VTEC Executive"): "honda-civic-1.6i-vtec-executive",
+    ("Honda", "Civic", "1.5 VTEC Turbo Elegance"): "honda-civic-1.5-vtec-turbo-elegance",
+    ("Honda", "Civic", "1.5 VTEC Turbo Executive+"): "honda-civic-1.5-vtec-turbo-executive-plus",
+    ("Volkswagen", "Tiguan", "Farketmez"): "arazi-suv-pickup-volkswagen-tiguan",
+    ("Volkswagen", "Tiguan", "1.4 TSI Comfortline"): "arazi-suv-pickup-volkswagen-tiguan-1.4-tsi-comfortline",
+    ("Volkswagen", "Tiguan", "1.4 TSI Highline"): "arazi-suv-pickup-volkswagen-tiguan-1.4-tsi-highline",
+    ("Volkswagen", "Tiguan", "1.4 TSI ACT DSG"): "arazi-suv-pickup-volkswagen-tiguan-1.4-tsi",
+    ("Volkswagen", "Tiguan", "1.5 TSI Life"): "arazi-suv-pickup-volkswagen-tiguan-1.5-tsi",
+    ("Volkswagen", "Tiguan", "1.5 TSI Elegance"): "arazi-suv-pickup-volkswagen-tiguan-1.5-tsi-elegance",
+    ("Volkswagen", "Tiguan", "1.5 TSI R-Line"): "arazi-suv-pickup-volkswagen-tiguan-1.5-tsi-r-line",
+    ("Volkswagen", "Tiguan", "2.0 TDI Comfortline"): "arazi-suv-pickup-volkswagen-tiguan-2.0-tdi-comfortline",
+    ("Volkswagen", "Tiguan", "2.0 TDI Highline"): "arazi-suv-pickup-volkswagen-tiguan-2.0-tdi-highline",
+    ("Volkswagen", "Tiguan", "2.0 TDI R-Line"): "arazi-suv-pickup-volkswagen-tiguan-2.0-tdi-r-line",
+}
+
+ARABAM_FULL_SLUGS = {
+    ("Honda", "Civic", "Farketmez"): "honda-civic",
+    ("Honda", "Civic", "1.6 Eco Elegance"): "honda-civic-1-6-i-vtec-eco-elegance",
+    ("Honda", "Civic", "1.6 Eco Executive"): "honda-civic-1-6-i-vtec-eco-executive",
+    ("Honda", "Civic", "1.6 i-VTEC Elegance"): "honda-civic-1-6-i-vtec-elegance",
+    ("Honda", "Civic", "1.6 i-VTEC Executive"): "honda-civic-1-6-i-vtec-executive",
+    ("Honda", "Civic", "1.5 VTEC Turbo Elegance"): "honda-civic-1-5-vtec-turbo-elegance",
+    ("Honda", "Civic", "1.5 VTEC Turbo Executive+"): "honda-civic-1-5-vtec-turbo-executive-plus",
+    ("Volkswagen", "Tiguan", "Farketmez"): "volkswagen-tiguan",
+    ("Volkswagen", "Tiguan", "1.4 TSI Comfortline"): "volkswagen-tiguan-1-4-tsi-comfortline",
+    ("Volkswagen", "Tiguan", "1.4 TSI Highline"): "volkswagen-tiguan-1-4-tsi-highline",
+    ("Volkswagen", "Tiguan", "1.4 TSI ACT DSG"): "volkswagen-tiguan-1-4-tsi",
+    ("Volkswagen", "Tiguan", "1.5 TSI Life"): "volkswagen-tiguan-1-5-tsi-life",
+    ("Volkswagen", "Tiguan", "1.5 TSI Elegance"): "volkswagen-tiguan-1-5-tsi-elegance",
+    ("Volkswagen", "Tiguan", "1.5 TSI R-Line"): "volkswagen-tiguan-1-5-tsi-r-line",
+    ("Volkswagen", "Tiguan", "2.0 TDI Comfortline"): "volkswagen-tiguan-2-0-tdi-comfortline",
+    ("Volkswagen", "Tiguan", "2.0 TDI Highline"): "volkswagen-tiguan-2-0-tdi-highline",
+    ("Volkswagen", "Tiguan", "2.0 TDI R-Line"): "volkswagen-tiguan-2-0-tdi-r-line",
+}
+
+OTOPLUS_PACKAGE_SLUGS = {
+    ("Volkswagen", "Tiguan", "1.4 TSI Comfortline"): "tiguan-1.4-tsi-bmt-125-comfortline",
+    ("Volkswagen", "Tiguan", "1.4 TSI Highline"): "tiguan-1.4-tsi-act-bmt-150-dsg-highline",
+    ("Honda", "Civic", "Farketmez"): "",
+}
+
+SOURCE_DEFS = [
+    {"key": "sahibinden", "name": "Sahibinden", "base": "https://www.sahibinden.com", "mode": "guarded", "backup": True},
+    {"key": "arabam", "name": "Arabam", "base": "https://www.arabam.com", "mode": "direct", "backup": True},
+    {"key": "letgo", "name": "Letgo", "base": "https://www.letgo.com", "mode": "direct", "backup": True},
+    {"key": "facebook", "name": "Facebook Marketplace", "base": "https://www.facebook.com", "mode": "guarded", "backup": True},
+    {"key": "vavacars", "name": "VavaCars", "base": "https://tr.vava.cars", "mode": "direct", "backup": True},
+    {"key": "otoplus", "name": "Otoplus", "base": "https://www.otoplus.com", "mode": "direct", "backup": True},
+    {"key": "otokoc", "name": "Otokoç 2. El", "base": "https://www.otokocikinciel.com", "mode": "guarded", "backup": True},
+    {"key": "arabasepeti", "name": "Araba Sepeti", "base": "https://www.arabasepeti.com", "mode": "direct", "backup": True},
+    {"key": "arabalar", "name": "Arabalar.com", "base": "https://www.arabalar.com.tr", "mode": "guarded", "backup": True},
+]
+
+def _pkg_name(search):
+    return (search.get("package_name") or "Farketmez").strip() or "Farketmez"
+
+def _is_suv(search):
+    return (search.get("model") or "").strip() in SUV_MODELS
+
+def _arabam_category(search):
+    return "arazi-suv-pick-up" if _is_suv(search) else "otomobil"
+
+def _sahibinden_full_slug(search):
+    brand = (search.get("brand") or "").strip()
+    model = (search.get("model") or "").strip()
+    pkg = _pkg_name(search)
+    slug = SAHIBINDEN_FULL_SLUGS.get((brand, model, pkg))
+    if not slug and pkg != "Farketmez":
+        slug = SAHIBINDEN_FULL_SLUGS.get((brand, model, "Farketmez"))
+        # Sahibinden bazı motorlarda paket yerine motor kırılımı kullanıyor. Emin değilsek geniş sayfa açar.
+        if not slug:
+            base = f"{tr_slug(brand)}-{tr_slug(model)}".strip("-")
+            slug = ("arazi-suv-pickup-" if _is_suv(search) else "") + base
+    if not slug:
+        base = f"{tr_slug(brand)}-{tr_slug(model)}".strip("-")
+        slug = ("arazi-suv-pickup-" if _is_suv(search) else "") + base
+    return slug
+
+def _arabam_full_slug(search):
+    brand = (search.get("brand") or "").strip()
+    model = (search.get("model") or "").strip()
+    pkg = _pkg_name(search)
+    slug = ARABAM_FULL_SLUGS.get((brand, model, pkg))
+    if not slug:
+        pieces = [brand, model]
+        if pkg != "Farketmez":
+            pieces.append(pkg)
+        slug = tr_slug(" ".join(pieces))
+    return slug
+
+def _otoplus_path(search):
+    brand = tr_slug(search.get("brand", ""))
+    model = tr_slug(search.get("model", ""))
+    exact = OTOPLUS_PACKAGE_SLUGS.get(((search.get("brand") or "").strip(), (search.get("model") or "").strip(), _pkg_name(search)))
+    if exact:
+        return f"/{brand}/{model}/{exact}"
+    return f"/{brand}/{model}"
+
+def _url_city_suffix(search):
+    city = _city_slug(search)
+    return city if city else ""
+
+def build_search_url(source_def, search, open_url=False):
+    key = source_def.get("key")
+    q = quote_plus(_exact_query_text(search))
+    city = _url_city_suffix(search)
+
+    if key == "sahibinden":
+        path = _sahibinden_full_slug(search)
+        if city:
+            path += f"/{city}"
+        return f"https://www.sahibinden.com/{path}"
+
+    if key == "arabam":
+        slug = _arabam_full_slug(search)
+        if city:
+            slug += f"-{city}"
+        return f"https://www.arabam.com/ikinci-el/{_arabam_category(search)}/{slug}"
+
+    if key == "otoplus":
+        return "https://www.otoplus.com" + _otoplus_path(search)
+
+    if key == "facebook":
+        return f"https://www.facebook.com/marketplace/search/?query={q}"
+
+    if key == "letgo":
+        # letgo web araması çoğu oturumda JS/lokasyon ister. En azından ana sayfa yerine net site içi arama verir.
+        return f"https://www.google.com/search?q={quote_plus('site:letgo.com/item ' + _exact_query_text(search))}"
+
+    if key == "vavacars":
+        # VavaCars web arayüzü JS ile çalıştığı için ana sayfa yerine site içi arama açılır.
+        return f"https://www.google.com/search?q={quote_plus('site:tr.vava.cars ' + _exact_query_text(search))}"
+
+    if key == "otokoc":
+        return f"https://www.google.com/search?q={quote_plus('site:otokocikinciel.com ' + _exact_query_text(search))}"
+
+    if key == "arabasepeti":
+        return f"https://www.google.com/search?q={quote_plus('site:arabasepeti.com ' + _exact_query_text(search))}"
+
+    if key == "arabalar":
+        return f"https://www.google.com/search?q={quote_plus('site:arabalar.com.tr ' + _exact_query_text(search))}"
+
+    return source_def.get("base", "")
+
+def build_backup_search_url(source_def, search):
+    # Direkt link çalışmazsa ana sayfaya düşürmek yerine Google site içi arama açılır.
+    host = urlparse(source_def.get("base", "")).netloc.replace("www.", "")
+    return "https://www.google.com/search?q=" + quote_plus(f"site:{host} {_exact_query_text(search)} ikinci el fiyat km")
+
+def item_key_for(url, title):
+    material = f"{url}|{title}"
+    return hashlib.sha1(material.encode("utf-8", errors="ignore")).hexdigest()
+
+def _important_pkg_tokens(search):
+    pkg = normalize_text(_pkg_name(search)).replace("-", " ")
+    tokens = re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", pkg)
+    return [t for t in tokens if t not in {"farketmez", "i", "v", "tec", "tsi", "tdi", "bmt", "act", "dsg"}]
+
+def package_matches(item, search):
+    pkg = _pkg_name(search)
+    if pkg == "Farketmez":
+        return True
+    text = normalize_text((item.get("title") or "") + " " + (item.get("url") or "") + " " + (item.get("raw_text") or ""))
+    tokens = _important_pkg_tokens(search)
+    if not tokens:
+        return True
+    # En az bir güçlü paket kelimesi ve mümkünse motor işareti yeterli kabul edilir.
+    strong = [t for t in tokens if len(t) >= 4 or t in {"eco", "tsi", "tdi"}]
+    if strong and any(t in text for t in strong):
+        return True
+    # Tüm kısa motor parçaları görünüyorsa kabul.
+    return len(tokens) >= 2 and sum(1 for t in tokens if t in text) >= min(2, len(tokens))
+
+def passes_filters(item, search):
+    hay = normalize_text((item.get("title") or "") + " " + (item.get("raw_text") or "") + " " + (item.get("url") or ""))
+    brand = normalize_text(search.get("brand", ""))
+    model_words = [w for w in normalize_text(search.get("model", "")).replace("-", " ").split() if w]
+    if brand and brand not in hay and tr_slug(search.get("brand", "")) not in hay:
+        return False
+    if model_words and not all(w in hay for w in model_words[:2]):
+        return False
+    if not package_matches(item, search):
+        return False
+    price = item.get("price")
+    if price is not None:
+        if search.get("price_min") and price < search["price_min"]: return False
+        if search.get("price_max") and price > search["price_max"]: return False
+    year = item.get("year")
+    if year is not None:
+        if search.get("year_min") and year < search["year_min"]: return False
+        if search.get("year_max") and year > search["year_max"]: return False
+    km = item.get("km")
+    if km is not None and search.get("km_max") and km > search["km_max"]: return False
+    return True
+
+def _extract_city_from_text(text):
+    nt = normalize_text(text)
+    for c in CITIES:
+        if normalize_text(c) in nt:
+            return c
+    return None
+
+def _good_href_for_source(source_def, href):
+    h = href or ""
+    key = source_def.get("key")
+    low = h.lower()
+    if key == "sahibinden": return "/ilan/" in low
+    if key == "arabam": return "/ilan/" in low or ("/ikinci-el/" in low and "?" not in low and len(low) > 35)
+    if key == "otoplus": return "sahibinden-" in low or re.search(r"\d+km.*\d+tl", low) is not None
+    if key == "letgo": return "/item/" in low
+    return any(x in low for x in ["/ilan/", "/item/", "sahibinden-", "ikinci-el"])
+
+def _best_url(block, source_def, search_url):
+    best = ""
+    for a in block.find_all("a", href=True) if hasattr(block, "find_all") else []:
+        href = a.get("href", "").strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        full = urljoin(source_def["base"], href).split("#")[0]
+        host = urlparse(full).netloc.replace("www.", "")
+        base_host = urlparse(source_def["base"]).netloc.replace("www.", "")
+        if base_host and base_host not in host:
+            continue
+        if _good_href_for_source(source_def, href):
+            return full
+        if not best and full.rstrip("/") != source_def["base"].rstrip("/"):
+            best = full
+    return best or search_url
+
+def _title_from_lines(lines, search):
+    brand = normalize_text(search.get("brand", ""))
+    model = normalize_text(search.get("model", ""))
+    bad = {"goster", "karşılaştır", "gizle", "favorilerimde", "fiyat", "kilometre", "renk", "tarih", "il", "ilçe", "araba al", "araç sat"}
+    for line in lines:
+        nl = normalize_text(line)
+        if len(line) >= 18 and brand in nl and model in nl and not any(b in nl for b in bad):
+            return line
+    for line in lines:
+        nl = normalize_text(line)
+        if len(line) >= 18 and not any(b in nl for b in bad) and (model in nl or any(t in nl for t in _important_pkg_tokens(search))):
+            return line
+    return lines[0] if lines else "Araç ilanı"
+
+def _item_from_block_v8(source_def, block, search, search_url):
+    text = block.get_text("\n", strip=True) if hasattr(block, "get_text") else str(block)
+    text = re.sub(r"[ \t]+", " ", text)
+    if not text or len(text) < 20:
+        return None
+    if len(text) > 2500:
+        return None
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ", x).strip()]
+    title = _title_from_lines(lines, search)
+    url = _best_url(block, source_def, search_url)
+    item = {
+        "source_key": source_def["key"],
+        "source_name": source_def["name"],
+        "title": title[:220],
+        "url": url,
+        "price": extract_price(text),
+        "year": extract_year(text),
+        "km": extract_km(text),
+        "city": _extract_city_from_text(text),
+        "raw_text": text[:2000],
+    }
+    return item if passes_filters(item, search) else None
+
+def _text_fallback_items(source_def, soup, search, search_url, limit):
+    text = soup.get_text("\n", strip=True)
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ", x).strip()]
+    results, seen = [], set()
+    brand = normalize_text(search.get("brand", ""))
+    model = normalize_text(search.get("model", ""))
+    for i, line in enumerate(lines):
+        window = "\n".join(lines[i:i+12])
+        nw = normalize_text(window)
+        if brand not in nw or model not in nw:
+            continue
+        if not extract_price(window):
+            continue
+        title = _title_from_lines(lines[i:i+6], search)
+        # gerçek ilan linki yakalanamayan JS/karmaşık sayfalarda liste sayfasına benzersiz çapa koyulur
+        synthetic_url = search_url + "#" + hashlib.sha1(window.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        item = {
+            "source_key": source_def["key"], "source_name": source_def["name"],
+            "title": title[:220], "url": synthetic_url,
+            "price": extract_price(window), "year": extract_year(window), "km": extract_km(window),
+            "city": _extract_city_from_text(window), "raw_text": window[:2000]
+        }
+        k = item_key_for(item["url"], item["title"])
+        if k in seen: continue
+        if passes_filters(item, search):
+            seen.add(k); results.append(item)
+        if len(results) >= limit: break
+    return results
+
+def parse_search_page(source_def, html, search, limit=50):
+    soup = BeautifulSoup(html or "", "html.parser")
+    search_url = build_search_url(source_def, search)
+    selectors = [
+        "tr.searchResultsItem", "tr[class*='searchResultsItem']", "tr[class*='listing']",
+        "li[class*='listing']", "li[class*='search']", "article", "div[class*='listing']",
+        "div[class*='card']", "div[class*='vehicle']", "div[class*='product']",
+        "a[href*='/ilan/']", "a[href*='sahibinden-']", "a[href*='/item/']"
+    ]
+    candidates = []
+    for sel in selectors:
+        try:
+            candidates.extend(soup.select(sel))
+        except Exception:
+            pass
+    # Son çare olarak tablo satırları ve listeleri al.
+    if not candidates:
+        candidates = soup.find_all(["tr", "li", "article", "a"], href=True) + soup.find_all(["tr", "li", "article"])
+    results, seen = [], set()
+    for block in candidates:
+        item = _item_from_block_v8(source_def, block, search, search_url)
+        if not item:
+            continue
+        k = item_key_for(item["url"], item["title"])
+        if k in seen:
+            continue
+        seen.add(k)
+        results.append(item)
+        if len(results) >= limit:
+            break
+    if not results:
+        results = _text_fallback_items(source_def, soup, search, search_url, limit)
+    return results[:limit]
+
+def fetch_source(source_def, search, limit=50):
+    url = build_search_url(source_def, search)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+    }
+    status_code = None
+    try:
+        if source_def.get("mode") == "guarded":
+            time.sleep(1.0)
+        # Google yedek linkleri direkt scrape edilmez, sadece buton olarak verilir.
+        if url.startswith("https://www.google.com/search"):
+            return [], {"source": source_def["name"], "url": url, "status": "Harici arama linki hazır", "status_code": 200}
+        resp = requests.get(url, headers=headers, timeout=25, allow_redirects=True)
+        status_code = resp.status_code
+        direct_status = f"HTTP {resp.status_code}"
+        if resp.status_code < 400:
+            results = parse_search_page(source_def, resp.text, search, limit=limit)
+            return results, {"source": source_def["name"], "url": url, "status": f"{direct_status} / liste: {len(results)}", "status_code": resp.status_code}
+        return [], {"source": source_def["name"], "url": url, "status": direct_status, "status_code": resp.status_code}
+    except Exception as exc:
+        return [], {"source": source_def["name"], "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": status_code}
+
+def health_v8():
+    return jsonify({
+        "ok": True,
+        "version": V8_VERSION,
+        "time": now_iso(),
+        "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
+        "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
+    })
+app.view_functions["health"] = health_v8
+
+
 # Cloud deploys import app:app with gunicorn. The scheduler and database must start on import.
 boot_app()
 
