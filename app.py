@@ -53,6 +53,98 @@ CAR_CATALOG = {
     "Volvo": ["S40", "S60", "S90", "V40", "XC40", "XC60", "XC90"],
 }
 
+# Model bazlı hazır paket/motor listesi. Kullanıcı paket yazmaz, listeden seçer.
+DEFAULT_PACKAGES = ["Farketmez"]
+CAR_PACKAGES = {
+    "Volkswagen": {
+        "Tiguan": ["Farketmez", "1.4 TSI Comfortline", "1.4 TSI Highline", "1.4 TSI ACT DSG", "1.5 TSI Life", "1.5 TSI Elegance", "1.5 TSI R-Line", "2.0 TDI Comfortline", "2.0 TDI Highline", "2.0 TDI R-Line"],
+        "Golf": ["Farketmez", "1.0 TSI Life", "1.0 eTSI Life", "1.4 TSI Comfortline", "1.4 TSI Highline", "1.5 TSI Life", "1.5 eTSI Style", "1.5 eTSI R-Line"],
+        "Passat": ["Farketmez", "1.4 TSI Comfortline", "1.4 TSI Highline", "1.5 TSI Business", "1.5 TSI Elegance", "1.6 TDI Comfortline", "1.6 TDI Highline"],
+        "Polo": ["Farketmez", "1.0 MPI Trendline", "1.0 TSI Comfortline", "1.0 TSI Life", "1.0 TSI Style"],
+        "T-Roc": ["Farketmez", "1.5 TSI Life", "1.5 TSI Style", "1.5 TSI R-Line"],
+    },
+    "Honda": {
+        "Civic": ["Farketmez", "1.6 i-VTEC Elegance", "1.6 i-VTEC Executive", "1.6 Eco Elegance", "1.6 Eco Executive", "1.5 VTEC Turbo Elegance", "1.5 VTEC Turbo Executive+"],
+        "City": ["Farketmez", "1.5 Executive", "1.5 Elegance"],
+        "HR-V": ["Farketmez", "Elegance", "Advance", "Style"],
+        "CR-V": ["Farketmez", "Elegance", "Executive", "Executive+"],
+    },
+    "Ford": {
+        "Kuga": ["Farketmez", "1.5 EcoBoost Style", "1.5 EcoBoost Titanium", "1.5 EcoBoost ST-Line", "1.5 TDCi Titanium", "2.0 TDCi Titanium"],
+        "Focus": ["Farketmez", "Trend X", "Titanium", "ST-Line", "1.5 TDCi Titanium", "1.5 EcoBoost Titanium"],
+        "Puma": ["Farketmez", "Style", "Titanium", "ST-Line", "ST-Line X"],
+    },
+    "Jeep": {
+        "Compass": ["Farketmez", "1.3 e-Hybrid Limited", "1.3 e-Hybrid Summit", "1.4 MultiAir Limited", "1.4 MultiAir Longitude", "1.6 Multijet Limited", "1.6 Multijet Longitude"],
+        "Renegade": ["Farketmez", "Longitude", "Limited", "Trailhawk", "1.3 e-Hybrid Limited"],
+        "Avenger": ["Farketmez", "Longitude", "Altitude", "Summit"],
+    },
+    "Hyundai": {
+        "Tucson": ["Farketmez", "1.6 T-GDI Comfort", "1.6 T-GDI Elite", "1.6 T-GDI Elite Plus", "1.6 CRDi Elite", "1.6 CRDi Elite Plus"],
+        "Bayon": ["Farketmez", "Jump", "Style", "Elite"],
+        "i20": ["Farketmez", "Jump", "Style", "Elite", "N Line"],
+        "Kona": ["Farketmez", "Style", "Elite", "N Line"],
+    },
+    "Peugeot": {
+        "3008": ["Farketmez", "Active", "Allure", "Allure Selection", "GT", "GT Line", "1.5 BlueHDi Allure", "1.5 BlueHDi GT"],
+        "2008": ["Farketmez", "Active", "Allure", "GT", "GT Line"],
+        "308": ["Farketmez", "Active", "Allure", "GT", "GT Line"],
+        "5008": ["Farketmez", "Allure", "GT", "GT Line"],
+    },
+    "Citroen": {
+        "C5 Aircross": ["Farketmez", "Feel", "Feel Bold", "Shine", "Shine Bold"],
+        "C4": ["Farketmez", "Feel", "Feel Bold", "Shine", "Shine Bold"],
+        "C4 X": ["Farketmez", "Feel", "Feel Bold", "Shine", "Shine Bold"],
+        "C3 Aircross": ["Farketmez", "Feel", "Shine"],
+    },
+    "Renault": {
+        "Megane": ["Farketmez", "Joy", "Touch", "Icon", "1.3 TCe Joy", "1.3 TCe Touch", "1.5 dCi Touch", "1.5 dCi Icon"],
+        "Clio": ["Farketmez", "Joy", "Touch", "Icon", "Equilibre", "Techno", "1.0 TCe Joy", "1.0 TCe Touch"],
+        "Captur": ["Farketmez", "Touch", "Icon", "Icon EDC", "Techno"],
+        "Kadjar": ["Farketmez", "Touch", "Icon", "1.5 dCi Icon"],
+    },
+    "Toyota": {
+        "Corolla": ["Farketmez", "Vision", "Dream", "Flame", "Passion", "Hybrid Dream", "Hybrid Flame", "Hybrid Passion"],
+        "C-HR": ["Farketmez", "Dream", "Flame", "Passion", "Hybrid Dream", "Hybrid Flame", "Hybrid Passion"],
+        "Yaris": ["Farketmez", "Dream", "Flame", "Passion", "Hybrid Dream", "Hybrid Flame"],
+        "RAV4": ["Farketmez", "Hybrid Flame", "Hybrid Passion", "Hybrid Passion X-Pack"],
+    },
+    "BMW": {
+        "3 Serisi": ["Farketmez", "316i Comfort", "316i Luxury", "318i Edition M Sport", "320i ED Luxury", "320i ED M Sport", "320d xDrive M Sport"],
+        "5 Serisi": ["Farketmez", "520i Luxury Line", "520i M Sport", "520d Luxury Line", "520d M Sport"],
+        "X1": ["Farketmez", "sDrive18i X Line", "sDrive18i M Sport", "sDrive18d X Line"],
+        "X3": ["Farketmez", "xDrive20i X Line", "xDrive20i M Sport", "xDrive20d M Sport"],
+    },
+    "Mercedes-Benz": {
+        "C Serisi": ["Farketmez", "C180 AMG", "C180 Avantgarde", "C200 AMG", "C200d AMG", "C220d AMG"],
+        "A Serisi": ["Farketmez", "A180 Style", "A180 Progressive", "A180 AMG", "A200 AMG"],
+        "GLA": ["Farketmez", "GLA 180 Style", "GLA 200 AMG", "GLA 200 Progressive"],
+        "GLC": ["Farketmez", "GLC 250 4Matic AMG", "GLC 300 AMG", "GLC 220d AMG"],
+    },
+    "Skoda": {
+        "Octavia": ["Farketmez", "Optimal", "Ambition", "Style", "Premium", "1.0 TSI e-Tec", "1.5 TSI Style"],
+        "Superb": ["Farketmez", "Prestige", "Premium", "L&K", "1.5 TSI Prestige", "1.5 TSI Premium"],
+        "Karoq": ["Farketmez", "Elite", "Prestige", "Sportline"],
+        "Kodiaq": ["Farketmez", "Elite", "Prestige", "Sportline", "L&K"],
+    },
+    "Opel": {
+        "Astra": ["Farketmez", "Edition", "Elegance", "GS Line", "Ultimate"],
+        "Mokka": ["Farketmez", "Elegance", "GS Line", "Ultimate"],
+        "Grandland": ["Farketmez", "Edition", "Elegance", "GS Line", "Ultimate"],
+        "Corsa": ["Farketmez", "Edition", "Elegance", "GS Line", "Ultimate"],
+    },
+    "Kia": {
+        "Sportage": ["Farketmez", "Cool", "Elegance", "Prestige", "GT-Line", "1.6 T-GDI Elegance", "1.6 CRDi Prestige"],
+        "Stonic": ["Farketmez", "Cool", "Elegance", "Prestige"],
+        "Ceed": ["Farketmez", "Cool", "Elegance", "Prestige", "GT-Line"],
+    },
+    "Nissan": {
+        "Qashqai": ["Farketmez", "Visia", "Tekna", "Skypack", "Platinum", "1.3 DIG-T Tekna", "1.5 dCi Tekna"],
+        "Juke": ["Farketmez", "Tekna", "Platinum", "N-Design"],
+        "X-Trail": ["Farketmez", "Designpack", "Skypack", "Platinum"],
+    },
+}
+
 CITIES = [
     "Tüm Türkiye", "Adana", "Adıyaman", "Afyonkarahisar", "Ağrı", "Amasya", "Ankara", "Antalya", "Artvin", "Aydın",
     "Balıkesir", "Bilecik", "Bingöl", "Bitlis", "Bolu", "Burdur", "Bursa", "Çanakkale", "Çankırı", "Çorum",
@@ -162,6 +254,7 @@ def init_db():
             name TEXT NOT NULL,
             brand TEXT NOT NULL,
             model TEXT NOT NULL,
+            package_name TEXT,
             city TEXT,
             year_min INTEGER,
             year_max INTEGER,
@@ -233,6 +326,8 @@ def init_db():
     cols = [row[1] for row in cur.execute("PRAGMA table_info(searches)").fetchall()]
     if "check_interval_hours" not in cols:
         cur.execute("ALTER TABLE searches ADD COLUMN check_interval_hours INTEGER DEFAULT 4")
+    if "package_name" not in cols:
+        cur.execute("ALTER TABLE searches ADD COLUMN package_name TEXT")
     conn.commit()
     conn.close()
 
@@ -379,6 +474,9 @@ def extract_km(text):
 
 def build_query_text(search):
     q_parts = [search["brand"], search["model"]]
+    package_name = search.get("package_name") or "Farketmez"
+    if package_name != "Farketmez":
+        q_parts.append(package_name)
     if search.get("fuel") and search.get("fuel") != "Farketmez":
         q_parts.append(search.get("fuel"))
     if search.get("gear") and search.get("gear") != "Farketmez":
@@ -409,6 +507,35 @@ def item_key_for(url, title):
     return hashlib.sha1(material.encode("utf-8", errors="ignore")).hexdigest()
 
 
+def package_matches(item, search):
+    package_name = (search.get("package_name") or "Farketmez").strip()
+    if not package_name or package_name == "Farketmez":
+        return True
+    text = normalize_text((item.get("title", "") or "") + " " + (item.get("url", "") or ""))
+    pkg = normalize_text(package_name).replace("-", " ")
+    tokens = re.findall(r"[a-z0-9]+(?:\.[0-9]+)?", pkg)
+    if not tokens:
+        return True
+
+    trim_keywords = [
+        "comfortline", "highline", "life", "elegance", "executive", "executive+", "r", "line", "rline",
+        "style", "business", "trendline", "allure", "active", "gt", "shine", "feel", "bold",
+        "touch", "icon", "joy", "dream", "flame", "passion", "premium", "prestige", "ambition",
+        "sportline", "limited", "longitude", "summit", "titanium", "st", "elite", "plus", "ultimate",
+        "edition", "amg", "avantgarde", "progressive", "luxury", "x", "pack", "skypack", "platinum"
+    ]
+    important = [t for t in tokens if t in trim_keywords or any(k == t or k in t for k in trim_keywords)]
+    engine = [t for t in tokens if re.match(r"^\d+(?:\.\d+)?$", t) or t in {"tsi", "tdi", "tcdi", "tdci", "dci", "hdi", "crdi", "eco", "hybrid", "vtec", "multiair", "multijet", "dig", "bluehdi", "ecoboost", "tgdi"}]
+
+    # Paket adı başlıkta/linkte varsa tam isabet kabul et.
+    if important and any(t in text for t in important):
+        return True
+    # Paket özel isim içermiyorsa motor bilgisinden eşleştir.
+    if not important and engine and all(t in text for t in engine[:2]):
+        return True
+    return False
+
+
 def passes_filters(item, search):
     text_n = normalize_text(item.get("title", ""))
     brand_ok = normalize_text(search["brand"]).replace("-", " ") in text_n or tr_slug(search["brand"]).replace("-", " ") in text_n
@@ -421,6 +548,8 @@ def passes_filters(item, search):
     if not model_ok and model_words:
         model_ok = all(w in url_n for w in model_words[:2])
     if not (brand_ok and model_ok):
+        return False
+    if not package_matches(item, search):
         return False
 
     price = item.get("price")
@@ -753,6 +882,8 @@ def index():
 def options():
     return jsonify({
         "catalog": CAR_CATALOG,
+        "package_map": CAR_PACKAGES,
+        "default_packages": DEFAULT_PACKAGES,
         "cities": CITIES,
         "sources": SOURCE_DEFS,
         "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
@@ -792,12 +923,13 @@ def find_duplicate_search(conn, payload, sources):
     brand = (payload.get("brand") or "").strip()
     model = (payload.get("model") or "").strip()
     city = payload.get("city") or "Tüm Türkiye"
+    package_name = payload.get("package_name") or "Farketmez"
     rows = conn.execute(
         "SELECT * FROM searches WHERE active=1 AND brand=? AND model=? AND city=?",
         (brand, model, city),
     ).fetchall()
     wanted_sources = sorted([str(x) for x in sources])
-    comparable_keys = ["year_min", "year_max", "price_min", "price_max", "km_max", "fuel", "gear"]
+    comparable_keys = ["package_name", "year_min", "year_max", "price_min", "price_max", "km_max", "fuel", "gear"]
     for row in rows:
         d = dict(row)
         try:
@@ -811,7 +943,7 @@ def find_duplicate_search(conn, payload, sources):
             incoming = payload.get(key)
             if incoming == "":
                 incoming = None
-            if key in ("fuel", "gear"):
+            if key in ("fuel", "gear", "package_name"):
                 incoming = incoming or "Farketmez"
                 existing = d.get(key) or "Farketmez"
             else:
@@ -845,10 +977,10 @@ def create_search():
             "message": "Bu takip zaten var. Yeni kopya oluşturmadım; mevcut takibi açabilirsin."
         })
     cur = conn.execute(
-        """INSERT INTO searches(name,brand,model,city,year_min,year_max,price_min,price_max,km_max,fuel,gear,sources_json,email_to,telegram_chat_id,check_interval_hours,created_at,last_status)
-           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+        """INSERT INTO searches(name,brand,model,package_name,city,year_min,year_max,price_min,price_max,km_max,fuel,gear,sources_json,email_to,telegram_chat_id,check_interval_hours,created_at,last_status)
+           VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            name, brand, model, payload.get("city") or "Tüm Türkiye",
+            name, brand, model, payload.get("package_name") or "Farketmez", payload.get("city") or "Tüm Türkiye",
             payload.get("year_min") or None, payload.get("year_max") or None,
             payload.get("price_min") or None, payload.get("price_max") or None,
             payload.get("km_max") or None, payload.get("fuel") or "Farketmez", payload.get("gear") or "Farketmez",
@@ -961,7 +1093,7 @@ def update_interval(search_id):
 def health():
     return jsonify({
         "ok": True,
-        "version": "v4-sahibinden-ozel-mod",
+        "version": "v5-paket-secimli",
         "time": now_iso(),
         "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
         "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,

@@ -72,3 +72,10 @@ version: v4-sahibinden-ozel-mod
 - Kayıtlı takip kartında “Sahibinden'de aç” butonu görünür.
 
 Bu sistem şifre saklamaz ve CAPTCHA atlatmaz.
+
+
+## v5 Paket / Motor Seçimi
+- Takip oluştururken artık marka ve modelden sonra hazır Paket / Motor listesi gelir.
+- Örnek: Volkswagen > Tiguan > 1.4 TSI Comfortline.
+- Mevcut veritabanı otomatik güncellenir; eski takipler Farketmez kabul edilir.
+- Güncellemeden sonra Render üzerinde Deploy latest commit yapılması yeterlidir.

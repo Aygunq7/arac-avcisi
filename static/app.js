@@ -45,6 +45,7 @@ function fillOptions() {
   city.innerHTML = OPTIONS.cities.map(c => `<option>${esc(c)}</option>`).join('');
   if (OPTIONS.cities.includes('Kocaeli')) city.value = 'Kocaeli';
   fillModels();
+  fillPackages();
 
   const interval = $('check_interval_hours');
   interval.innerHTML = intervalChoices().map(h => `<option value="${h}" ${Number(OPTIONS.default_interval_hours || 4) === Number(h) ? 'selected' : ''}>${intervalLabel(h)}</option>`).join('');
@@ -65,6 +66,15 @@ function fillModels() {
   const b = $('brand').value;
   const models = OPTIONS.catalog[b] || [];
   $('model').innerHTML = models.map(m => `<option>${esc(m)}</option>`).join('');
+  fillPackages();
+}
+function fillPackages() {
+  const b = $('brand').value;
+  const m = $('model').value;
+  const byBrand = (OPTIONS.package_map && OPTIONS.package_map[b]) ? OPTIONS.package_map[b] : {};
+  let packages = byBrand[m] || OPTIONS.default_packages || ['Farketmez'];
+  if (!packages.includes('Farketmez')) packages = ['Farketmez', ...packages];
+  $('package_name').innerHTML = packages.map(p => `<option>${esc(p)}</option>`).join('');
 }
 function selectedSources() {
   return [...document.querySelectorAll('#sources input:checked')].map(x => x.value);
@@ -74,6 +84,7 @@ async function createSearch() {
     name: $('name').value.trim(),
     brand: $('brand').value,
     model: $('model').value,
+    package_name: $('package_name').value,
     city: $('city').value,
     year_min: num('year_min'),
     year_max: num('year_max'),
@@ -124,6 +135,7 @@ async function loadSearches() {
     <div class="item">
       <strong>${esc(s.name)}</strong>
       <span class="badge">${esc(s.brand)} ${esc(s.model)}</span>
+      ${s.package_name && s.package_name !== 'Farketmez' ? `<span class="badge">${esc(s.package_name)}</span>` : ''}
       <span class="badge">${esc(s.city || 'Tüm Türkiye')}</span>
       <span class="badge ${s.active ? 'ok' : 'off'}">${s.active ? 'Aktif' : 'Pasif'}</span>
       <span class="badge">${intervalLabel(s.check_interval_hours || OPTIONS.default_interval_hours || 4)}</span>
@@ -213,6 +225,7 @@ async function init() {
   OPTIONS = await api('/api/options');
   fillOptions();
   $('brand').addEventListener('change', fillModels);
+  $('model').addEventListener('change', fillPackages);
   $('createBtn').addEventListener('click', createSearch);
   $('refreshBtn').addEventListener('click', async () => { await loadSearches(); await loadEvents(); });
   await loadSearches();

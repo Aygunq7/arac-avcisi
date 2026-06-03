@@ -44,3 +44,10 @@ https://senin-linkin.onrender.com/health
 ```
 
 `version: v4-sahibinden-ozel-mod` görürsen güncelleme gelmiş demektir.
+
+
+## v5 Paket / Motor Seçimi
+- Takip oluştururken artık marka ve modelden sonra hazır Paket / Motor listesi gelir.
+- Örnek: Volkswagen > Tiguan > 1.4 TSI Comfortline.
+- Mevcut veritabanı otomatik güncellenir; eski takipler Farketmez kabul edilir.
+- Güncellemeden sonra Render üzerinde Deploy latest commit yapılması yeterlidir.
