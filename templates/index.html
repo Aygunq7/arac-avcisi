@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>Araç Avcısı</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">Mobil ikinci el araç takip paneli</p>
+        <h1>Araç Avcısı</h1>
+        <p class="muted">Siteleri ve araçları hazır listeden seç. İlk arama kayıt olur, sonra yeni ilan ve fiyat düşüşü takip edilir.</p>
+      </div>
+      <div class="status-pill" id="health">4 saatte bir kontrol</div>
+    </header>
+
+    <section class="card">
+      <h2>Yeni takip oluştur</h2>
+      <div class="grid two">
+        <label>Arama adı
+          <input id="name" placeholder="Örn: Civic Eco Elegance">
+        </label>
+        <label>Şehir
+          <select id="city"></select>
+        </label>
+      </div>
+
+      <div class="grid two">
+        <label>Marka
+          <select id="brand"></select>
+        </label>
+        <label>Model
+          <select id="model"></select>
+        </label>
+      </div>
+
+      <div class="grid three">
+        <label>En düşük yıl
+          <input id="year_min" type="number" inputmode="numeric" placeholder="2020">
+        </label>
+        <label>En yüksek yıl
+          <input id="year_max" type="number" inputmode="numeric" placeholder="2026">
+        </label>
+        <label>Max km
+          <input id="km_max" type="number" inputmode="numeric" placeholder="100000">
+        </label>
+      </div>
+
+      <div class="grid two">
+        <label>Min fiyat
+          <input id="price_min" type="number" inputmode="numeric" placeholder="1000000">
+        </label>
+        <label>Max fiyat
+          <input id="price_max" type="number" inputmode="numeric" placeholder="1600000">
+        </label>
+      </div>
+
+      <div class="grid two">
+        <label>Yakıt
+          <select id="fuel">
+            <option>Farketmez</option><option>Benzin</option><option>Dizel</option><option>LPG</option><option>Hibrit</option><option>Elektrik</option>
+          </select>
+        </label>
+        <label>Vites
+          <select id="gear">
+            <option>Farketmez</option><option>Otomatik</option><option>Manuel</option><option>Yarı Otomatik</option>
+          </select>
+        </label>
+      </div>
+
+      <h3>Siteleri seç</h3>
+      <div class="sources" id="sources"></div>
+
+      <h3>Bildirim</h3>
+      <div class="grid two">
+        <label>Mail adresi
+          <input id="email_to" type="email" placeholder="ornek@mail.com">
+        </label>
+        <label>Telegram Chat ID
+          <input id="telegram_chat_id" placeholder="Boş kalırsa .env kullanılır">
+        </label>
+      </div>
+
+      <button class="primary" id="createBtn">Takibi başlat</button>
+      <p class="note">İlk arama sadece başlangıç listesi oluşturur. Bundan sonraki yeni ilanlar ve fiyat düşüşleri bildirilir.</p>
+    </section>
+
+    <section class="card">
+      <div class="row-head">
+        <h2>Kayıtlı takipler</h2>
+        <button class="ghost" id="refreshBtn">Yenile</button>
+      </div>
+      <div id="searches" class="list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Son bildirim olayları</h2>
+      <div id="events" class="list"></div>
+    </section>
+  </div>
+
+  <div id="toast"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
