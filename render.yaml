@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: arac-avcisi-bulut-mobil
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT app:app
+    healthCheckPath: /health
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: CHECK_INTERVAL_HOURS
+        value: 4
+      - key: ENABLE_SCHEDULER
+        value: 1
+      - key: SECRET_KEY
+        generateValue: true
+    disk:
+      name: arac-avcisi-data
+      mountPath: /data
+      sizeGB: 1
