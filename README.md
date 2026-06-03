@@ -51,3 +51,10 @@ https://senin-linkin.onrender.com/health
 - Örnek: Volkswagen > Tiguan > 1.4 TSI Comfortline.
 - Mevcut veritabanı otomatik güncellenir; eski takipler Farketmez kabul edilir.
 - Güncellemeden sonra Render üzerinde Deploy latest commit yapılması yeterlidir.
+
+## v6 Liste Görünümü
+- Arama veya manuel kontrol sonrası bulunan ilanlar otomatik olarak takip kartının altında açılır.
+- İlanlar kaynak/site bazında gruplanır.
+- Her ilan için site adı, başlık, fiyat, yıl, km, ilk/son görülme zamanı ve direkt ilan linki gösterilir.
+- Link kopyalama butonu eklendi.
+- Takip kartında toplam bulunan ilan ve site bazlı ilan sayıları görünür.

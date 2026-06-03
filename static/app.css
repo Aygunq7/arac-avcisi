@@ -126,3 +126,78 @@ a { color: #7dd3fc; text-decoration: none; }
 .source-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .mini-link { display: inline-flex; align-items: center; min-height: 36px; padding: 0 11px; border-radius: 999px; border: 1px solid rgba(125,211,252,.35); background: rgba(14,165,233,.12); color: #bae6fd; font-size: 12px; font-weight: 800; }
 .mini-link.alt { border-color: rgba(52,211,153,.35); background: rgba(34,197,94,.10); color: #bbf7d0; }
+
+.results-box { display: grid; gap: 12px; margin-top: 12px; }
+.search-card { overflow: hidden; }
+.source-group {
+  border: 1px solid rgba(125,211,252,.18);
+  background: rgba(2,6,23,.22);
+  border-radius: 18px;
+  padding: 12px;
+}
+.source-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.source-group-head h3 { margin: 0; color: #bae6fd; }
+.result-card {
+  border: 1px solid var(--line);
+  background: rgba(15,23,42,.82);
+  border-radius: 16px;
+  padding: 12px;
+  margin-top: 10px;
+}
+.result-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+.result-top strong { margin: 0; line-height: 1.35; }
+.price-pill {
+  white-space: nowrap;
+  border: 1px solid rgba(52,211,153,.35);
+  background: rgba(34,197,94,.10);
+  color: #bbf7d0;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 900;
+}
+.result-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.url-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 10px;
+}
+.url-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid var(--line);
+  background: rgba(2,6,23,.52);
+  border-radius: 12px;
+  padding: 10px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+.tiny {
+  min-height: 36px;
+  padding: 0 11px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255,255,255,.08);
+  color: var(--text);
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .result-top { display: grid; }
+  .price-pill { width: fit-content; }
+  .url-row { grid-template-columns: 1fr; }
+  .url-row .mini-link, .url-row .tiny { justify-content: center; width: 100%; }
+}

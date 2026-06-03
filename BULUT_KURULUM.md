@@ -79,3 +79,8 @@ Bu sistem şifre saklamaz ve CAPTCHA atlatmaz.
 - Örnek: Volkswagen > Tiguan > 1.4 TSI Comfortline.
 - Mevcut veritabanı otomatik güncellenir; eski takipler Farketmez kabul edilir.
 - Güncellemeden sonra Render üzerinde Deploy latest commit yapılması yeterlidir.
+
+## v6 Liste Görünümü Güncellemesi
+GitHub'a yeni paketten `app.py`, `templates`, `static`, `README.md`, `BULUT_KURULUM.md` dosya/klasörlerini yükleyin. Deploy sonrası `/health` çıktısında `v6-liste-gorunumlu` görünmelidir.
+
+Bu sürümde arama sonucu yakalanan ilanlar takip kartı altında kaynak/site bazında listelenir. Araç başlığı, fiyat, yıl, km, ilan linki ve link kopyalama butonu görünür.

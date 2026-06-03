@@ -910,6 +910,12 @@ def list_searches():
             }
             for key in d["sources"] if key in source_map
         ]
+        count_rows = conn.execute(
+            "SELECT source_name, COUNT(*) AS count FROM items WHERE search_id=? GROUP BY source_name ORDER BY source_name",
+            (d["id"],),
+        ).fetchall()
+        d["item_count"] = sum(int(cr["count"]) for cr in count_rows)
+        d["source_item_counts"] = [dict(cr) for cr in count_rows]
         data.append(d)
     conn.close()
     return jsonify(data)
@@ -1093,7 +1099,7 @@ def update_interval(search_id):
 def health():
     return jsonify({
         "ok": True,
-        "version": "v5-paket-secimli",
+        "version": "v6-liste-gorunumlu",
         "time": now_iso(),
         "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
         "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
