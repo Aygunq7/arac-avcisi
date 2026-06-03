@@ -8,7 +8,7 @@ import smtplib
 import unicodedata
 from email.mime.text import MIMEText
 from datetime import datetime, timezone, timedelta
-from urllib.parse import quote_plus, urljoin
+from urllib.parse import quote_plus, urljoin, urlparse, parse_qs, unquote
 
 import requests
 from bs4 import BeautifulSoup
@@ -66,17 +66,80 @@ CITIES = [
 ]
 
 # Kaynaklar hazır gelir. Kullanıcı link yazmaz, sadece seçer.
+# mode alanı uygulamanın o kaynak için nasıl davranacağını belirler:
+# - direct: normal public sayfa isteği
+# - guarded: engel ihtimali yüksek, düşük istek + bekleme + yedek arama
 SOURCE_DEFS = [
-    {"key": "sahibinden", "name": "Sahibinden", "base": "https://www.sahibinden.com", "template": "https://www.sahibinden.com/otomobil?query_text={q}"},
-    {"key": "arabam", "name": "Arabam", "base": "https://www.arabam.com", "template": "https://www.arabam.com/ikinci-el/otomobil?searchText={q}"},
-    {"key": "letgo", "name": "Letgo", "base": "https://www.letgo.com", "template": "https://www.letgo.com/tr-tr/otomobil?q={q}"},
-    {"key": "facebook", "name": "Facebook Marketplace", "base": "https://www.facebook.com", "template": "https://www.facebook.com/marketplace/search/?query={q}"},
-    {"key": "vavacars", "name": "VavaCars", "base": "https://www.vavacars.com", "template": "https://www.vavacars.com/ikinci-el-araba?search={q}"},
-    {"key": "otoplus", "name": "Otoplus", "base": "https://www.otoplus.com", "template": "https://www.otoplus.com/ikinci-el-araba?search={q}"},
-    {"key": "otokoc", "name": "Otokoç 2. El", "base": "https://www.otokocikinciel.com", "template": "https://www.otokocikinciel.com/ikinci-el-arac?search={q}"},
-    {"key": "arabasepeti", "name": "Araba Sepeti", "base": "https://www.arabasepeti.com", "template": "https://www.arabasepeti.com/ikinci-el-araclar?search={q}"},
-    {"key": "arabalar", "name": "Arabalar.com", "base": "https://www.arabalar.com.tr", "template": "https://www.arabalar.com.tr/ikinci-el?kelime={q}"},
+    {
+        "key": "sahibinden", "name": "Sahibinden", "base": "https://www.sahibinden.com",
+        "template": "https://www.sahibinden.com/otomobil?query_text={q}",
+        "open_template": "https://www.sahibinden.com/otomobil?query_text={q}",
+        "mode": "guarded", "backup": True,
+        "note": "Özel mod: 429/403 gelirse bekleme + Bing yedek arama + Sahibinden’de aç butonu."
+    },
+    {
+        "key": "arabam", "name": "Arabam", "base": "https://www.arabam.com",
+        "template": "https://www.arabam.com/ikinci-el/otomobil?searchText={q}",
+        "open_template": "https://www.arabam.com/ikinci-el/otomobil?searchText={q}",
+        "mode": "direct", "backup": False,
+    },
+    {
+        "key": "letgo", "name": "Letgo", "base": "https://www.letgo.com",
+        "template": "https://www.letgo.com/tr-tr/otomobil?q={q}",
+        "open_template": "https://www.letgo.com/tr-tr/otomobil?q={q}",
+        "mode": "direct", "backup": False,
+    },
+    {
+        "key": "facebook", "name": "Facebook Marketplace", "base": "https://www.facebook.com",
+        "template": "https://www.facebook.com/marketplace/search/?query={q}",
+        "open_template": "https://www.facebook.com/marketplace/search/?query={q}",
+        "mode": "guarded", "backup": False,
+        "note": "Facebook çoğunlukla giriş ister. Uygulama şifre saklamaz; tek tuşla Marketplace’te açar."
+    },
+    {
+        "key": "vavacars", "name": "VavaCars", "base": "https://www.vavacars.com",
+        "template": "https://www.vavacars.com/tr/ikinci-el-araba?search={q}",
+        "open_template": "https://www.vavacars.com/tr/ikinci-el-araba?search={q}",
+        "mode": "direct", "backup": False,
+    },
+    {
+        "key": "otoplus", "name": "Otoplus", "base": "https://www.otoplus.com",
+        "template": "https://www.otoplus.com/ikinci-el-araba?search={q}",
+        "open_template": "https://www.otoplus.com/ikinci-el-araba?search={q}",
+        "mode": "guarded", "backup": False,
+    },
+    {
+        "key": "otokoc", "name": "Otokoç 2. El", "base": "https://www.otokocikinciel.com",
+        "template": "https://www.otokocikinciel.com/ikinci-el-arac?search={q}",
+        "open_template": "https://www.otokocikinciel.com/ikinci-el-arac?search={q}",
+        "mode": "guarded", "backup": False,
+    },
+    {
+        "key": "arabasepeti", "name": "Araba Sepeti", "base": "https://www.arabasepeti.com",
+        "template": "https://www.arabasepeti.com/ikinci-el-araclar?search={q}",
+        "open_template": "https://www.arabasepeti.com/ikinci-el-araclar?search={q}",
+        "mode": "direct", "backup": False,
+    },
+    {
+        "key": "arabalar", "name": "Arabalar.com", "base": "https://www.arabalar.com.tr",
+        "template": "https://www.arabalar.com.tr/ikinci-el?kelime={q}",
+        "open_template": "https://www.arabalar.com.tr/ikinci-el?kelime={q}",
+        "mode": "guarded", "backup": False,
+    },
 ]
+
+BACKOFF_HOURS_BY_STATUS = {
+    400: 12,
+    401: 24,
+    403: 48,
+    404: 12,
+    408: 4,
+    429: 24,
+    500: 6,
+    502: 6,
+    503: 6,
+    504: 6,
+}
 
 
 def now_iso():
@@ -151,6 +214,19 @@ def init_db():
             created_at TEXT NOT NULL,
             notification_status TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS source_cooldowns (
+            search_id INTEGER NOT NULL,
+            source_key TEXT NOT NULL,
+            next_try_at TEXT,
+            last_status TEXT,
+            fail_count INTEGER DEFAULT 0,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY(search_id, source_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_search_active ON searches(active);
+        CREATE INDEX IF NOT EXISTS idx_items_search ON items(search_id, source_key);
         """
     )
     # Eski veritabanında yeni kolon yoksa otomatik ekle.
@@ -178,6 +254,62 @@ def parse_iso_datetime(value):
         return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     except Exception:
         return None
+
+
+def human_datetime(value):
+    dt = parse_iso_datetime(value)
+    if not dt:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone(timezone(timedelta(hours=3)))
+    return local.strftime("%d.%m.%Y %H:%M")
+
+
+def source_is_in_cooldown(conn, search_id, source_key):
+    row = conn.execute(
+        "SELECT * FROM source_cooldowns WHERE search_id=? AND source_key=?",
+        (search_id, source_key),
+    ).fetchone()
+    if not row or not row["next_try_at"]:
+        return None
+    next_try = parse_iso_datetime(row["next_try_at"])
+    if not next_try:
+        return None
+    if next_try.tzinfo is None:
+        next_try = next_try.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) < next_try:
+        d = dict(row)
+        d["human_next_try"] = human_datetime(row["next_try_at"])
+        return d
+    return None
+
+
+def set_source_cooldown(conn, search_id, source_key, status_code=None, status_text=""):
+    hours = BACKOFF_HOURS_BY_STATUS.get(int(status_code or 0), 6)
+    row = conn.execute(
+        "SELECT fail_count FROM source_cooldowns WHERE search_id=? AND source_key=?",
+        (search_id, source_key),
+    ).fetchone()
+    fail_count = int(row["fail_count"] if row else 0) + 1
+    # Arka arkaya hata geldikçe beklemeyi büyüt, ama 7 günü geçmesin.
+    hours = min(hours * max(1, min(fail_count, 4)), 168)
+    next_try_at = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(timespec="seconds")
+    conn.execute(
+        """INSERT INTO source_cooldowns(search_id,source_key,next_try_at,last_status,fail_count,updated_at)
+           VALUES(?,?,?,?,?,?)
+           ON CONFLICT(search_id, source_key) DO UPDATE SET
+           next_try_at=excluded.next_try_at,
+           last_status=excluded.last_status,
+           fail_count=excluded.fail_count,
+           updated_at=excluded.updated_at""",
+        (search_id, source_key, next_try_at, status_text, fail_count, now_iso()),
+    )
+    return next_try_at
+
+
+def clear_source_cooldown(conn, search_id, source_key):
+    conn.execute("DELETE FROM source_cooldowns WHERE search_id=? AND source_key=?", (search_id, source_key))
 
 
 def search_is_due(search):
@@ -245,15 +377,30 @@ def extract_km(text):
     return parse_int_num(m.group(1)) if m else None
 
 
-def build_search_url(source_def, search):
+def build_query_text(search):
     q_parts = [search["brand"], search["model"]]
-    if search["city"] and search["city"] != "Tüm Türkiye":
-        q_parts.append(search["city"])
-    if search["year_min"]:
-        q_parts.append(str(search["year_min"]))
-    q = " ".join([str(x) for x in q_parts if x])
+    if search.get("fuel") and search.get("fuel") != "Farketmez":
+        q_parts.append(search.get("fuel"))
+    if search.get("gear") and search.get("gear") != "Farketmez":
+        q_parts.append(search.get("gear"))
+    if search.get("city") and search.get("city") != "Tüm Türkiye":
+        q_parts.append(search.get("city"))
+    if search.get("year_min"):
+        q_parts.append(str(search.get("year_min")))
+    return " ".join([str(x) for x in q_parts if x])
+
+
+def build_search_url(source_def, search, open_url=False):
+    q = build_query_text(search)
     q_enc = quote_plus(q)
-    return source_def["template"].format(q=q_enc, brand=tr_slug(search["brand"]), model=tr_slug(search["model"]))
+    template = source_def.get("open_template") if open_url else source_def.get("template")
+    template = template or source_def["template"]
+    return template.format(q=q_enc, brand=tr_slug(search["brand"]), model=tr_slug(search["model"]))
+
+
+def build_backup_search_url(source_def, search):
+    q = f"site:{urlparse(source_def['base']).netloc} {build_query_text(search)} ikinci el"
+    return "https://www.bing.com/search?q=" + quote_plus(q)
 
 
 def item_key_for(url, title):
@@ -296,62 +443,140 @@ def passes_filters(item, search):
     return True
 
 
-def fetch_source(source_def, search, limit=50):
-    url = build_search_url(source_def, search)
+def parse_search_page(source_def, html, search, limit=50):
+    soup = BeautifulSoup(html, "html.parser")
+    anchors = soup.find_all("a", href=True)
+    results = []
+    seen = set()
+    for a in anchors:
+        href = a.get("href", "").strip()
+        if href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:"):
+            continue
+        full_url = urljoin(source_def["base"], href)
+        clean_url = full_url.split("#")[0]
+        if clean_url in seen:
+            continue
+        seen.add(clean_url)
+        card_text = " ".join(a.stripped_strings)
+        parent = a
+        for _ in range(4):
+            if parent and parent.parent:
+                parent = parent.parent
+        parent_text = parent.get_text(" ", strip=True) if parent else card_text
+        combined = f"{card_text} {parent_text}"
+        price = extract_price(combined)
+        year = extract_year(combined)
+        km = extract_km(combined)
+        title = re.sub(r"\s+", " ", card_text or parent_text).strip()
+        if not title or len(title) < 5:
+            continue
+        item = {
+            "source_key": source_def["key"],
+            "source_name": source_def["name"],
+            "title": title[:220],
+            "url": clean_url,
+            "price": price,
+            "year": year,
+            "km": km,
+            "city": None,
+        }
+        if passes_filters(item, search):
+            results.append(item)
+        if len(results) >= limit:
+            break
+    return results
+
+
+def fetch_bing_backup(source_def, search, limit=20):
+    """Sahibinden gibi engel veren kaynaklar için arama motoru yedek modu.
+    Bu mod tam liste garantisi vermez; sadece indekslenmiş ilanları yakalar.
+    """
+    url = build_backup_search_url(source_def, search)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36 AraçAvcisi/1.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
         "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
     }
     results = []
-    status = "ok"
     try:
         resp = requests.get(url, headers=headers, timeout=20)
-        status = f"HTTP {resp.status_code}"
         if resp.status_code >= 400:
-            return [], {"source": source_def["name"], "url": url, "status": status}
+            return [], {"source": f"{source_def['name']} yedek arama", "url": url, "status": f"HTTP {resp.status_code}", "status_code": resp.status_code}
         soup = BeautifulSoup(resp.text, "html.parser")
-        anchors = soup.find_all("a", href=True)
+        host = urlparse(source_def["base"]).netloc.replace("www.", "")
         seen = set()
-        for a in anchors:
-            href = a.get("href", "").strip()
-            if href.startswith("#") or href.startswith("javascript:") or href.startswith("mailto:"):
+        for a in soup.find_all("a", href=True):
+            href = a.get("href", "")
+            # Bing bazen gerçek adresi u parametresine koyar.
+            if href.startswith("/ck/a"):
+                qs = parse_qs(urlparse(href).query)
+                if qs.get("u"):
+                    href = unquote(qs["u"][0])
+                    if href.startswith("a1"):
+                        href = href[2:]
+            if not href.startswith("http"):
                 continue
-            full_url = urljoin(source_def["base"], href)
-            clean_url = full_url.split("#")[0]
-            if clean_url in seen:
+            if host not in urlparse(href).netloc.replace("www.", ""):
                 continue
-            seen.add(clean_url)
-            card_text = " ".join(a.stripped_strings)
-            # Yakındaki parent kart içinde fiyat/yıl/km bulunabilir.
-            parent = a
-            for _ in range(3):
-                if parent and parent.parent:
-                    parent = parent.parent
-            parent_text = parent.get_text(" ", strip=True) if parent else card_text
-            combined = f"{card_text} {parent_text}"
-            price = extract_price(combined)
-            year = extract_year(combined)
-            km = extract_km(combined)
-            title = re.sub(r"\s+", " ", card_text or parent_text).strip()
-            if not title or len(title) < 5:
+            clean = href.split("#")[0]
+            if clean in seen:
                 continue
+            seen.add(clean)
+            title = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()[:220]
+            if not title:
+                title = f"{source_def['name']} ilanı"
             item = {
                 "source_key": source_def["key"],
-                "source_name": source_def["name"],
-                "title": title[:220],
-                "url": clean_url,
-                "price": price,
-                "year": year,
-                "km": km,
+                "source_name": source_def["name"] + " / yedek",
+                "title": title,
+                "url": clean,
+                "price": extract_price(title),
+                "year": extract_year(title),
+                "km": extract_km(title),
                 "city": None,
             }
             if passes_filters(item, search):
                 results.append(item)
             if len(results) >= limit:
                 break
+        return results, {"source": f"{source_def['name']} yedek arama", "url": url, "status": "ok", "status_code": 200}
+    except Exception as exc:
+        return [], {"source": f"{source_def['name']} yedek arama", "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": None}
+
+
+def fetch_source(source_def, search, limit=50):
+    url = build_search_url(source_def, search)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36 AraçAvcisi/2.0",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+    }
+    status = "ok"
+    status_code = None
+    try:
+        # Guarded kaynaklarda biraz daha nazik davran. Site engeli görünürse backoff devreye girer.
+        if source_def.get("mode") == "guarded":
+            time.sleep(1.5)
+        resp = requests.get(url, headers=headers, timeout=25, allow_redirects=True)
+        status_code = resp.status_code
+        status = f"HTTP {resp.status_code}"
+        if resp.status_code >= 400:
+            log = {"source": source_def["name"], "url": url, "status": status, "status_code": resp.status_code}
+            # Sahibinden gibi kaynaklarda engel geldiğinde yedek arama denenir.
+            if source_def.get("backup") and resp.status_code in (400, 403, 429):
+                backup_items, backup_log = fetch_bing_backup(source_def, search, limit=limit)
+                backup_log["primary_status"] = status
+                backup_log["primary_status_code"] = resp.status_code
+                backup_log["status"] = f"{status} / yedek: {backup_log.get('status', '')}"
+                # status_code asıl kaynağın durumudur; böylece kaynak bazlı bekleme devreye girer.
+                backup_log["status_code"] = resp.status_code
+                return backup_items, backup_log
+            return [], log
+        results = parse_search_page(source_def, resp.text, search, limit=limit)
+        return results, {"source": source_def["name"], "url": url, "status": status, "status_code": resp.status_code}
     except Exception as exc:
         status = f"Hata: {exc.__class__.__name__}: {exc}"
-    return results, {"source": source_def["name"], "url": url, "status": status}
+    return [], {"source": source_def["name"], "url": url, "status": status, "status_code": status_code}
 
 
 def format_price(value):
@@ -444,8 +669,24 @@ def check_search(search_id, baseline=False):
         source_def = source_map.get(key)
         if not source_def:
             continue
+        cooldown = None if baseline else source_is_in_cooldown(conn, search_id, key)
+        if cooldown:
+            logs.append({
+                "source": source_def["name"],
+                "url": build_search_url(source_def, search, open_url=True),
+                "status": f"Beklemede: {cooldown.get('last_status') or 'kaynak sınırı'} / tekrar: {cooldown.get('human_next_try')}",
+                "status_code": None,
+                "cooldown": True,
+            })
+            continue
         items, log = fetch_source(source_def, search)
         logs.append(log)
+        status_code = log.get("status_code")
+        if status_code and int(status_code) >= 400:
+            next_try = set_source_cooldown(conn, search_id, key, status_code, log.get("status", ""))
+            log["cooldown_until"] = human_datetime(next_try)
+        elif items or (status_code and int(status_code) < 400):
+            clear_source_cooldown(conn, search_id, key)
         for item in items:
             total_seen += 1
             item_key = item_key_for(item["url"], item["title"])
@@ -527,9 +768,61 @@ def list_searches():
     for r in rows:
         d = dict(r)
         d["sources"] = json.loads(d.pop("sources_json"))
+        source_map = {s["key"]: s for s in SOURCE_DEFS}
+        d["source_links"] = [
+            {
+                "key": key,
+                "name": source_map.get(key, {"name": key}).get("name"),
+                "url": build_search_url(source_map[key], d, open_url=True) if key in source_map else "",
+                "backup_url": build_backup_search_url(source_map[key], d) if key in source_map and source_map[key].get("backup") else "",
+                "note": source_map.get(key, {}).get("note", ""),
+            }
+            for key in d["sources"] if key in source_map
+        ]
         data.append(d)
     conn.close()
     return jsonify(data)
+
+
+def normalize_sources_json(sources):
+    return json.dumps(sorted([str(x) for x in (sources or [])]), ensure_ascii=False)
+
+
+def find_duplicate_search(conn, payload, sources):
+    brand = (payload.get("brand") or "").strip()
+    model = (payload.get("model") or "").strip()
+    city = payload.get("city") or "Tüm Türkiye"
+    rows = conn.execute(
+        "SELECT * FROM searches WHERE active=1 AND brand=? AND model=? AND city=?",
+        (brand, model, city),
+    ).fetchall()
+    wanted_sources = sorted([str(x) for x in sources])
+    comparable_keys = ["year_min", "year_max", "price_min", "price_max", "km_max", "fuel", "gear"]
+    for row in rows:
+        d = dict(row)
+        try:
+            row_sources = sorted(json.loads(d.get("sources_json") or "[]"))
+        except Exception:
+            row_sources = []
+        if row_sources != wanted_sources:
+            continue
+        same = True
+        for key in comparable_keys:
+            incoming = payload.get(key)
+            if incoming == "":
+                incoming = None
+            if key in ("fuel", "gear"):
+                incoming = incoming or "Farketmez"
+                existing = d.get(key) or "Farketmez"
+            else:
+                incoming = int(incoming) if incoming is not None else None
+                existing = d.get(key)
+            if incoming != existing:
+                same = False
+                break
+        if same:
+            return d
+    return None
 
 
 @app.route("/api/searches", methods=["POST"])
@@ -542,6 +835,15 @@ def create_search():
         return jsonify({"ok": False, "message": "Marka, model ve en az bir site seçmelisin."}), 400
     name = payload.get("name") or f"{brand} {model}"
     conn = db()
+    duplicate = find_duplicate_search(conn, payload, sources)
+    if duplicate:
+        conn.close()
+        return jsonify({
+            "ok": True,
+            "duplicate": True,
+            "id": duplicate["id"],
+            "message": "Bu takip zaten var. Yeni kopya oluşturmadım; mevcut takibi açabilirsin."
+        })
     cur = conn.execute(
         """INSERT INTO searches(name,brand,model,city,year_min,year_max,price_min,price_max,km_max,fuel,gear,sources_json,email_to,telegram_chat_id,check_interval_hours,created_at,last_status)
            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
@@ -575,6 +877,30 @@ def list_items(search_id):
     return jsonify([dict(r) for r in rows])
 
 
+@app.route("/api/searches/<int:search_id>/source-links")
+def source_links(search_id):
+    conn = db()
+    search = load_search(conn, search_id)
+    conn.close()
+    if not search:
+        return jsonify({"ok": False, "message": "Takip bulunamadı"}), 404
+    source_keys = json.loads(search["sources_json"])
+    source_map = {s["key"]: s for s in SOURCE_DEFS}
+    links = []
+    for key in source_keys:
+        sdef = source_map.get(key)
+        if not sdef:
+            continue
+        links.append({
+            "key": key,
+            "name": sdef["name"],
+            "url": build_search_url(sdef, search, open_url=True),
+            "backup_url": build_backup_search_url(sdef, search) if sdef.get("backup") else "",
+            "note": sdef.get("note", ""),
+        })
+    return jsonify({"ok": True, "links": links})
+
+
 @app.route("/api/events")
 def list_events():
     conn = db()
@@ -595,6 +921,22 @@ def toggle_search(search_id):
     conn.commit()
     conn.close()
     return jsonify({"ok": True, "active": new_state})
+
+
+@app.route("/api/searches/<int:search_id>/delete", methods=["POST"])
+def delete_search(search_id):
+    conn = db()
+    row = conn.execute("SELECT id FROM searches WHERE id=?", (search_id,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"ok": False, "message": "Takip bulunamadı"}), 404
+    conn.execute("DELETE FROM events WHERE search_id=?", (search_id,))
+    conn.execute("DELETE FROM items WHERE search_id=?", (search_id,))
+    conn.execute("DELETE FROM source_cooldowns WHERE search_id=?", (search_id,))
+    conn.execute("DELETE FROM searches WHERE id=?", (search_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"ok": True})
 
 
 @app.route("/api/searches/<int:search_id>/interval", methods=["POST"])
@@ -619,6 +961,7 @@ def update_interval(search_id):
 def health():
     return jsonify({
         "ok": True,
+        "version": "v4-sahibinden-ozel-mod",
         "time": now_iso(),
         "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
         "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
