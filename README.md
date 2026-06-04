@@ -74,3 +74,7 @@ Bu sürümde site aç butonlarının ana sayfaya düşmesi azaltıldı. Sahibind
 
 ## v9 düzeltmesi
 Seçim kutularının boş kalmasına neden olan JavaScript tırnak hatası düzeltildi. Cache sürümü v9 yapıldı.
+
+
+## v10
+Letgo, Facebook Marketplace, VavaCars, Otokoç 2. El, Araba Sepeti ve Arabalar.com butonları Google yerine ilgili sitenin kendi arama/model sayfasına gidecek şekilde düzeltildi. Arka plan liste yakalama için arama motoru yedek taraması ayrı tutuldu.

@@ -1458,7 +1458,7 @@ def boot_app():
 # Bu blok boot_app() çağrısından önce çalışır. Böylece Render ayağa kalkarken
 # yeni link üretici ve yeni parser aktif olur.
 
-V8_VERSION = "v9-secim-kutulari-duzeltildi"
+V8_VERSION = "v10-site-butonlari-net-duzeltildi"
 
 SUV_MODELS = {
     "Tiguan", "T-Roc", "Taigo", "Kuga", "Puma", "Compass", "Renegade", "Avenger",
@@ -1834,6 +1834,206 @@ def health_v8():
         "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
     })
 app.view_functions["health"] = health_v8
+
+
+
+
+# -----------------------------------------------------------------------------
+# v10: Letgo / Facebook / VavaCars / Otokoç / Araba Sepeti / Arabalar.com
+# site butonları Google'a değil doğrudan ilgili sitenin arama/model sayfasına gider.
+# Otomatik liste yakalama için arka planda hâlâ Bing yedek taraması ayrı tutulur.
+# -----------------------------------------------------------------------------
+V8_VERSION = "v10-site-butonlari-net-duzeltildi"
+
+SOURCE_DEFS = [
+    {"key": "sahibinden", "name": "Sahibinden", "base": "https://www.sahibinden.com", "mode": "guarded", "backup": True},
+    {"key": "arabam", "name": "Arabam", "base": "https://www.arabam.com", "mode": "direct", "backup": True},
+    {"key": "letgo", "name": "Letgo", "base": "https://www.letgo.com", "mode": "direct", "backup": True},
+    {"key": "facebook", "name": "Facebook Marketplace", "base": "https://www.facebook.com", "mode": "guarded", "backup": True},
+    {"key": "vavacars", "name": "VavaCars", "base": "https://tr.vava.cars", "mode": "direct", "backup": True},
+    {"key": "otoplus", "name": "Otoplus", "base": "https://www.otoplus.com", "mode": "direct", "backup": True},
+    {"key": "otokoc", "name": "Otokoç 2. El", "base": "https://www.otokocikinciel.com", "mode": "guarded", "backup": True},
+    {"key": "arabasepeti", "name": "Araba Sepeti", "base": "https://www.arabasepeti.com", "mode": "direct", "backup": True},
+    {"key": "arabalar", "name": "Arabalar.com", "base": "https://www.arabalar.com.tr", "mode": "guarded", "backup": True},
+]
+
+
+def _q(search):
+    return quote_plus(_exact_query_text(search))
+
+
+def _q_slug(search):
+    return tr_slug(_exact_query_text(search))
+
+
+def _bslug(search):
+    return tr_slug(search.get("brand", ""))
+
+
+def _mslug(search):
+    return tr_slug(search.get("model", ""))
+
+
+def _brand_model_path(search):
+    b, m = _bslug(search), _mslug(search)
+    return f"{b}-{m}".strip("-")
+
+
+def _otokoc_model_url(search):
+    return f"https://www.otokocikinciel.com/ikinci-el-{_brand_model_path(search)}"
+
+
+def _arabasepeti_search_url(search):
+    # Bu endpoint önceki sürümlerde HTTP 200 dönüyordu; site kendi içinde arama yapar.
+    return "https://www.arabasepeti.com/ikinci-el-araclar?search=" + _q(search)
+
+
+def _arabalar_model_url(search):
+    b, m = _bslug(search), _mslug(search)
+    if b and m:
+        return f"https://www.arabalar.com.tr/{b}/{m}"
+    if b:
+        return f"https://www.arabalar.com.tr/{b}"
+    return "https://www.arabalar.com.tr/"
+
+
+def build_search_url(source_def, search, open_url=False):
+    key = source_def.get("key")
+    q = _q(search)
+    slugq = _q_slug(search)
+    city = _url_city_suffix(search)
+
+    if key == "sahibinden":
+        path = _sahibinden_full_slug(search)
+        if city:
+            path += f"/{city}"
+        return f"https://www.sahibinden.com/{path}"
+
+    if key == "arabam":
+        slug = _arabam_full_slug(search)
+        if city:
+            slug += f"-{city}"
+        return f"https://www.arabam.com/ikinci-el/{_arabam_category(search)}/{slug}"
+
+    if key == "letgo":
+        # Google yerine Letgo'nun kendi arama yolu. Giriş/lokasyon isterse en azından doğru sorgu sayfası açılır.
+        return f"https://www.letgo.com/tr-tr/q-{slugq}"
+
+    if key == "facebook":
+        return f"https://www.facebook.com/marketplace/search/?query={q}"
+
+    if key == "vavacars":
+        # VavaCars JS ağırlıklı çalışır; bu sayfa araç keşif ekranıdır, query parametresi tarayıcıda korunur.
+        return f"https://tr.vava.cars/cars-for-you?search={q}"
+
+    if key == "otoplus":
+        return "https://www.otoplus.com" + _otoplus_path(search)
+
+    if key == "otokoc":
+        return _otokoc_model_url(search)
+
+    if key == "arabasepeti":
+        return _arabasepeti_search_url(search)
+
+    if key == "arabalar":
+        return _arabalar_model_url(search)
+
+    return source_def.get("base", "")
+
+
+def build_backup_search_url(source_def, search):
+    """Kullanıcının gördüğü 'yedek ara' linki: Google/Bing değil, yine ilgili sitenin geniş sayfası."""
+    key = source_def.get("key")
+    city = _url_city_suffix(search)
+
+    if key == "sahibinden":
+        base = SAHIBINDEN_FULL_SLUGS.get(((search.get("brand") or "").strip(), (search.get("model") or "").strip(), "Farketmez"))
+        if not base:
+            base = ("arazi-suv-pickup-" if _is_suv(search) else "") + _brand_model_path(search)
+        return f"https://www.sahibinden.com/{base}"
+
+    if key == "arabam":
+        return f"https://www.arabam.com/ikinci-el/{_arabam_category(search)}/{_brand_model_path(search)}"
+
+    if key == "letgo":
+        # Letgo genel araba kategorisi; arama sayfası açılmazsa buradan site içi arama yapılır.
+        return "https://www.letgo.com/araba_c15705"
+
+    if key == "facebook":
+        return "https://www.facebook.com/marketplace/category/vehicles/"
+
+    if key == "vavacars":
+        return "https://tr.vava.cars/cars-for-you"
+
+    if key == "otoplus":
+        return f"https://www.otoplus.com/{_bslug(search)}/{_mslug(search)}" if _bslug(search) and _mslug(search) else "https://www.otoplus.com/ikinci-el-araba"
+
+    if key == "otokoc":
+        return f"https://www.otokocikinciel.com/ikinci-el-{_bslug(search)}" if _bslug(search) else "https://www.otokocikinciel.com/"
+
+    if key == "arabasepeti":
+        return "https://www.arabasepeti.com/ikinci-el-araclar"
+
+    if key == "arabalar":
+        return f"https://www.arabalar.com.tr/{_bslug(search)}" if _bslug(search) else "https://www.arabalar.com.tr/"
+
+    return source_def.get("base", "")
+
+
+def build_search_engine_backup_url(source_def, search):
+    """Otomatik liste yakalama için arka planda kullanılır; UI'da gösterilmez."""
+    host = urlparse(source_def.get("base", "")).netloc.replace("www.", "")
+    return "https://www.bing.com/search?q=" + quote_plus(f"site:{host} {_exact_query_text(search)} ikinci el fiyat km")
+
+
+def fetch_bing_backup(source_def, search, limit=30):
+    url = build_search_engine_backup_url(source_def, search)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    }
+    results = []
+    try:
+        resp = requests.get(url, headers=headers, timeout=25)
+        if resp.status_code >= 400:
+            return [], {"source": f"{source_def['name']} arka plan yedek", "url": url, "status": f"HTTP {resp.status_code}", "status_code": resp.status_code}
+        soup = BeautifulSoup(resp.text, "html.parser")
+        host = urlparse(source_def["base"]).netloc.replace("www.", "")
+        seen = set()
+        blocks = soup.select("li.b_algo") or soup.find_all("li") or soup.find_all("a", href=True)
+        for block in blocks:
+            a = block.find("a", href=True) if hasattr(block, "find") else None
+            if a is None and getattr(block, "name", "") == "a" and block.get("href"):
+                a = block
+            if not a:
+                continue
+            href = a.get("href", "")
+            if href.startswith("/ck/a"):
+                qs = parse_qs(urlparse(href).query)
+                if qs.get("u"):
+                    href = unquote(qs["u"][0])
+                    if href.startswith("a1"):
+                        href = href[2:]
+            if href.startswith("//"):
+                href = "https:" + href
+            if not href.startswith("http"):
+                continue
+            if host and host not in urlparse(href).netloc.replace("www.", ""):
+                continue
+            clean = href.split("#")[0]
+            if clean in seen:
+                continue
+            seen.add(clean)
+            title = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
+            block_text = block.get_text(" ", strip=True) if hasattr(block, "get_text") else title
+            item = _result_from_text_block({**source_def, "name": source_def["name"] + " / arka plan yedek"}, title, clean, block_text)
+            if passes_filters(item, search):
+                results.append(item)
+            if len(results) >= limit:
+                break
+        return results, {"source": f"{source_def['name']} arka plan yedek", "url": url, "status": "ok", "status_code": 200}
+    except Exception as exc:
+        return [], {"source": f"{source_def['name']} arka plan yedek", "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": None}
 
 
 # Cloud deploys import app:app with gunicorn. The scheduler and database must start on import.
