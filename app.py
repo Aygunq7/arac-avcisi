@@ -2036,6 +2036,325 @@ def fetch_bing_backup(source_def, search, limit=30):
         return [], {"source": f"{source_def['name']} arka plan yedek", "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": None}
 
 
+
+
+# -----------------------------------------------------------------------------
+# v11: Sahibinden ilanları listeye düşürme modu
+# -----------------------------------------------------------------------------
+# Not: Sahibinden doğrudan 429/403 verirse engel aşılmaz. Bu mod; önce normal
+# Sahibinden sayfasını dener, sonuç alınamazsa arka planda arama motoru indeksindeki
+# sahibinden.com/ilan linklerini listeye ekler. Bu nedenle liste tam/resmi veri
+# değildir ama uygulamada Sahibinden ilan linklerini göstermeyi sağlar.
+V8_VERSION = "v11-sahibinden-liste-modu"
+
+
+def _sahibinden_backup_query(search):
+    parts = [
+        "site:sahibinden.com/ilan/vasita",
+        search.get("brand", ""),
+        search.get("model", ""),
+    ]
+    pkg = _pkg_name(search)
+    if pkg and pkg != "Farketmez":
+        parts.append(pkg)
+    city = (search.get("city") or "").strip()
+    if city and city != "Tüm Türkiye":
+        parts.append(city)
+    if search.get("year_min"):
+        parts.append(str(search.get("year_min")))
+    if search.get("year_max") and search.get("year_max") != search.get("year_min"):
+        parts.append(str(search.get("year_max")))
+    parts.extend(["fiyat", "km"])
+    return " ".join([str(x).strip() for x in parts if str(x).strip()])
+
+
+def _sahibinden_backup_queries(search):
+    base = _sahibinden_backup_query(search)
+    brand_model = f"site:sahibinden.com/ilan/vasita {search.get('brand','')} {search.get('model','')} fiyat km"
+    pkg = _pkg_name(search)
+    queries = [base]
+    if pkg and pkg != "Farketmez":
+        queries.append(f"site:sahibinden.com/ilan/vasita {search.get('brand','')} {search.get('model','')} {pkg}")
+    queries.append(brand_model)
+    # Sırayı koruyarak kopyaları sil.
+    seen, out = set(), []
+    for q in queries:
+        q = re.sub(r"\s+", " ", q).strip()
+        if q and q not in seen:
+            seen.add(q); out.append(q)
+    return out
+
+
+def _sahibinden_backup_match(item, search):
+    """Bing/arama motoru snippet'leri çoğu zaman fiyat/km/paket vermez.
+    Bu yüzden marka+model şart, paket ise varsa yumuşak kontrol edilir.
+    """
+    hay = normalize_text((item.get("title") or "") + " " + (item.get("raw_text") or "") + " " + (item.get("url") or ""))
+    brand = normalize_text(search.get("brand", ""))
+    model_words = [w for w in normalize_text(search.get("model", "")).replace("-", " ").split() if w]
+    if brand and brand not in hay and tr_slug(search.get("brand", "")) not in hay:
+        return False
+    if model_words and not all(w in hay for w in model_words[:2]):
+        return False
+    # Eğer snippet paket bilgisini veriyorsa paket uysun; hiç veri yoksa marka/modeli geçir.
+    pkg = _pkg_name(search)
+    if pkg != "Farketmez":
+        tokens = _important_pkg_tokens(search)
+        visible_tokens = [t for t in tokens if t in hay]
+        # Paket kelimelerinden hiçbiri yoksa snippet eksik olabilir, eleme yapma.
+        if visible_tokens and not package_matches(item, search):
+            return False
+    price = item.get("price")
+    if price is not None:
+        if search.get("price_min") and price < search["price_min"]: return False
+        if search.get("price_max") and price > search["price_max"]: return False
+    year = item.get("year")
+    if year is not None:
+        if search.get("year_min") and year < search["year_min"]: return False
+        if search.get("year_max") and year > search["year_max"]: return False
+    km = item.get("km")
+    if km is not None and search.get("km_max") and km > search["km_max"]: return False
+    return True
+
+
+def fetch_sahibinden_index_backup(source_def, search, limit=30):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    results, seen = [], set()
+    last_status = None
+    used_urls = []
+    for q in _sahibinden_backup_queries(search):
+        url = "https://www.bing.com/search?q=" + quote_plus(q)
+        used_urls.append(url)
+        try:
+            resp = requests.get(url, headers=headers, timeout=25)
+            last_status = resp.status_code
+            if resp.status_code >= 400:
+                continue
+            soup = BeautifulSoup(resp.text or "", "html.parser")
+            blocks = soup.select("li.b_algo") or soup.find_all("li") or soup.find_all("a", href=True)
+            for block in blocks:
+                a = block.find("a", href=True) if hasattr(block, "find") else None
+                if a is None and getattr(block, "name", "") == "a" and block.get("href"):
+                    a = block
+                if not a:
+                    continue
+                href = a.get("href", "")
+                if href.startswith("/ck/a"):
+                    qs = parse_qs(urlparse(href).query)
+                    if qs.get("u"):
+                        href = unquote(qs["u"][0])
+                        if href.startswith("a1"):
+                            href = href[2:]
+                if href.startswith("//"):
+                    href = "https:" + href
+                if not href.startswith("http"):
+                    continue
+                parsed = urlparse(href)
+                host = parsed.netloc.replace("www.", "")
+                # Sadece gerçek ilan linklerini al. Kategori/anasayfa listeye karışmasın.
+                if "sahibinden.com" not in host or "/ilan/" not in parsed.path:
+                    continue
+                clean = href.split("#")[0]
+                if clean in seen:
+                    continue
+                title = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip()
+                text = block.get_text(" ", strip=True) if hasattr(block, "get_text") else title
+                # Bing bazen başlığı boş döndürür; URL'den okunabilir başlık üret.
+                if not title or title.lower().startswith("http"):
+                    title = unquote(parsed.path.rsplit("/", 1)[-1]).replace("-", " ").title()
+                item = {
+                    "source_key": "sahibinden",
+                    "source_name": "Sahibinden / yedek liste",
+                    "title": title,
+                    "url": clean,
+                    "city": _extract_city_from_text(text),
+                    "year": extract_year(text),
+                    "km": extract_km(text),
+                    "price": extract_price(text),
+                    "raw_text": text,
+                }
+                if _sahibinden_backup_match(item, search):
+                    seen.add(clean)
+                    results.append(item)
+                if len(results) >= limit:
+                    break
+            if len(results) >= limit:
+                break
+        except Exception as exc:
+            last_status = f"Hata: {exc.__class__.__name__}"
+            continue
+        time.sleep(0.4)
+    status = "ok" if results else f"Yedek listede ilan bulunamadı ({last_status})"
+    return results[:limit], {
+        "source": "Sahibinden / yedek liste",
+        "url": used_urls[0] if used_urls else build_backup_search_url(source_def, search),
+        "status": f"{status} / liste: {len(results)}",
+        "status_code": 200 if results else (last_status if isinstance(last_status, int) else None),
+    }
+
+
+def fetch_source(source_def, search, limit=50):
+    url = build_search_url(source_def, search)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+    }
+    key = source_def.get("key")
+    status_code = None
+    try:
+        if source_def.get("mode") == "guarded":
+            time.sleep(1.0)
+        resp = requests.get(url, headers=headers, timeout=25, allow_redirects=True)
+        status_code = resp.status_code
+        direct_status = f"HTTP {resp.status_code}"
+        if resp.status_code < 400:
+            results = parse_search_page(source_def, resp.text, search, limit=limit)
+            if results:
+                return results, {"source": source_def["name"], "url": url, "status": f"{direct_status} / liste: {len(results)}", "status_code": resp.status_code}
+            if key == "sahibinden":
+                bitems, blog = fetch_sahibinden_index_backup(source_def, search, limit=limit)
+                blog["status"] = f"{direct_status} / direkt liste yok / {blog.get('status','')}"
+                return bitems, blog
+            if source_def.get("backup"):
+                backup_items, backup_log = fetch_bing_backup(source_def, search, limit=limit)
+                backup_log["status"] = f"{direct_status} / direkt liste yok / yedek: {backup_log.get('status','')}"
+                backup_log["status_code"] = 200 if backup_items else resp.status_code
+                return backup_items, backup_log
+            return [], {"source": source_def["name"], "url": url, "status": f"{direct_status} / liste: 0", "status_code": resp.status_code}
+        # Sahibinden 429/403 verdiğinde yine de arama motoru indeksinden liste dene.
+        if key == "sahibinden":
+            bitems, blog = fetch_sahibinden_index_backup(source_def, search, limit=limit)
+            blog["primary_status"] = direct_status
+            blog["primary_status_code"] = resp.status_code
+            blog["status"] = f"{direct_status} / Sahibinden doğrudan engelledi / {blog.get('status','')}"
+            blog["status_code"] = 200 if bitems else resp.status_code
+            return bitems, blog
+        if source_def.get("backup"):
+            backup_items, backup_log = fetch_bing_backup(source_def, search, limit=limit)
+            backup_log["primary_status"] = direct_status
+            backup_log["primary_status_code"] = resp.status_code
+            backup_log["status"] = f"{direct_status} / yedek: {backup_log.get('status','')}"
+            backup_log["status_code"] = 200 if backup_items else resp.status_code
+            return backup_items, backup_log
+        return [], {"source": source_def["name"], "url": url, "status": direct_status, "status_code": resp.status_code}
+    except Exception as exc:
+        if key == "sahibinden":
+            bitems, blog = fetch_sahibinden_index_backup(source_def, search, limit=limit)
+            blog["primary_status"] = f"Hata: {exc.__class__.__name__}"
+            blog["status"] = f"Hata: {exc.__class__.__name__} / {blog.get('status','')}"
+            blog["status_code"] = 200 if bitems else status_code
+            return bitems, blog
+        if source_def.get("backup"):
+            backup_items, backup_log = fetch_bing_backup(source_def, search, limit=limit)
+            backup_log["primary_status"] = f"Hata: {exc.__class__.__name__}"
+            backup_log["status"] = f"Hata: {exc.__class__.__name__} / yedek: {backup_log.get('status','')}"
+            backup_log["status_code"] = 200 if backup_items else status_code
+            return backup_items, backup_log
+        return [], {"source": source_def["name"], "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": status_code}
+
+
+def check_search(search_id, baseline=False):
+    conn = db()
+    search = load_search(conn, search_id)
+    if not search or not search["active"]:
+        conn.close()
+        return {"ok": False, "message": "Arama pasif veya bulunamadı"}
+    source_keys = json.loads(search["sources_json"])
+    source_map = {s["key"]: s for s in SOURCE_DEFS}
+    total_new = 0
+    total_drop = 0
+    total_seen = 0
+    logs = []
+    for key in source_keys:
+        source_def = source_map.get(key)
+        if not source_def:
+            continue
+        cooldown = None if baseline else source_is_in_cooldown(conn, search_id, key)
+        if cooldown and key != "sahibinden":
+            logs.append({
+                "source": source_def["name"],
+                "url": build_search_url(source_def, search, open_url=True),
+                "status": f"Beklemede: {cooldown.get('last_status') or 'kaynak sınırı'} / tekrar: {cooldown.get('human_next_try')}",
+                "status_code": None,
+                "cooldown": True,
+            })
+            continue
+        if cooldown and key == "sahibinden":
+            items, log = fetch_sahibinden_index_backup(source_def, search)
+            log["status"] = f"Doğrudan Sahibinden beklemede; yedek liste denendi / {log.get('status','')}"
+            logs.append(log)
+            # cooldown devam eder ama yedek ilanlar yine listeye işlenir.
+        else:
+            items, log = fetch_source(source_def, search)
+            logs.append(log)
+        status_code = log.get("status_code")
+        if key != "sahibinden" and status_code and int(status_code) >= 400:
+            next_try = set_source_cooldown(conn, search_id, key, status_code, log.get("status", ""))
+            log["cooldown_until"] = human_datetime(next_try)
+        elif items or (status_code and isinstance(status_code, int) and int(status_code) < 400):
+            if key != "sahibinden" or items:
+                clear_source_cooldown(conn, search_id, key)
+        for item in items:
+            total_seen += 1
+            item_key = item_key_for(item["url"], item["title"])
+            existing = conn.execute(
+                "SELECT * FROM items WHERE search_id=? AND source_key=? AND item_key=?",
+                (search_id, item["source_key"], item_key),
+            ).fetchone()
+            price = item.get("price")
+            if existing is None:
+                cur = conn.execute(
+                    """INSERT INTO items(search_id,source_key,source_name,item_key,title,url,city,year,km,first_price,current_price,lowest_price,first_seen_at,last_seen_at,last_notified_price)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        search_id, item["source_key"], item["source_name"], item_key, item["title"], item["url"], item.get("city"),
+                        item.get("year"), item.get("km"), price, price, price, now_iso(), now_iso(), price,
+                    ),
+                )
+                item_id = cur.lastrowid
+                if not baseline and search["baseline_done"]:
+                    total_new += 1
+                    create_event(conn, search_id, item_id, "new", item, new_price=price, notify=True, search=search)
+            else:
+                old_price = existing["current_price"]
+                lowest = existing["lowest_price"]
+                new_lowest = min([p for p in [lowest, price] if p is not None], default=price)
+                conn.execute(
+                    """UPDATE items SET title=?, url=?, city=?, year=?, km=?, current_price=?, lowest_price=?, last_seen_at=? WHERE id=?""",
+                    (item["title"], item["url"], item.get("city"), item.get("year"), item.get("km"), price, new_lowest, now_iso(), existing["id"]),
+                )
+                if price is not None and old_price is not None and price < old_price and not baseline and search["baseline_done"]:
+                    total_drop += 1
+                    create_event(conn, search_id, existing["id"], "price_drop", item, old_price=old_price, new_price=price, notify=True, search=search)
+    status_text = "Kontrol tamamlandı. Görülen: %s, yeni: %s, fiyat düşen: %s | %s" % (
+        total_seen, total_new, total_drop, " ; ".join([f"{l.get('source')}: {l.get('status')}" for l in logs])
+    )
+    conn.execute(
+        "UPDATE searches SET last_checked_at=?, last_status=?, baseline_done=? WHERE id=?",
+        (now_iso(), status_text, 1 if baseline else search["baseline_done"], search_id),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "status": status_text, "logs": logs, "seen": total_seen, "new": total_new, "price_drop": total_drop}
+
+
+def health_v11():
+    return jsonify({
+        "ok": True,
+        "version": V8_VERSION,
+        "time": now_iso(),
+        "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
+        "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
+        "sahibinden_list_mode": "direct_then_index_backup",
+    })
+app.view_functions["health"] = health_v11
+
 # Cloud deploys import app:app with gunicorn. The scheduler and database must start on import.
 boot_app()
 

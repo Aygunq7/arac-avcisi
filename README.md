@@ -78,3 +78,7 @@ Seçim kutularının boş kalmasına neden olan JavaScript tırnak hatası düze
 
 ## v10
 Letgo, Facebook Marketplace, VavaCars, Otokoç 2. El, Araba Sepeti ve Arabalar.com butonları Google yerine ilgili sitenin kendi arama/model sayfasına gidecek şekilde düzeltildi. Arka plan liste yakalama için arama motoru yedek taraması ayrı tutuldu.
+
+
+## v11
+Sahibinden için liste modu eklendi. Sistem önce doğrudan Sahibinden sayfasını dener; 429/403 veya boş liste olursa arka planda arama motoru indeksindeki sahibinden.com/ilan bağlantılarını bulup listeye eklemeyi dener. Bu yöntem resmi API değildir ve tam liste garantisi vermez, fakat uygulama içinde Sahibinden ilan bağlantılarının görünmesini sağlar.
