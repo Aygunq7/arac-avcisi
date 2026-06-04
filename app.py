@@ -2355,6 +2355,492 @@ def health_v11():
     })
 app.view_functions["health"] = health_v11
 
+
+
+# -----------------------------------------------------------------------------
+# v12: Filtreler + Sahibinden liste düzeltmesi
+# -----------------------------------------------------------------------------
+# Bu sürümde siteye açılan linklerde fiyat/yıl/km/vites filtreleri URL'ye eklenir.
+# Sahibinden doğrudan 429 verirse, isteğe bağlı üçüncü taraf reader ve arama indeksinden
+# yalnızca public ilan linkleri denenir. CAPTCHA/giriş/engel aşma yapılmaz.
+V8_VERSION = "v12-filtre-ve-sahibinden-liste-duzeltme"
+
+
+def _as_int(value):
+    try:
+        if value is None or value == "":
+            return None
+        return int(str(value).replace(".", "").replace(",", "").strip())
+    except Exception:
+        return None
+
+
+def _fuel_segment(search):
+    fuel = normalize_text(search.get("fuel", ""))
+    mapping = {
+        "benzin": "benzin",
+        "benzinli": "benzin",
+        "benzin lpg": "benzin-lpg",
+        "benzin ve lpg": "benzin-lpg",
+        "lpg": "benzin-lpg",
+        "dizel": "dizel",
+        "hibrit": "hibrit",
+        "elektrikli": "elektrikli",
+    }
+    return mapping.get(fuel, "")
+
+
+def _gear_segment(search):
+    gear = normalize_text(search.get("gear", ""))
+    if "otomatik" in gear:
+        return "otomatik,yari-otomatik"
+    if "manuel" in gear:
+        return "manuel"
+    return ""
+
+
+def _sahibinden_filter_params(search):
+    params = {}
+    if _as_int(search.get("price_min")):
+        params["price_min"] = _as_int(search.get("price_min"))
+    if _as_int(search.get("price_max")):
+        params["price_max"] = _as_int(search.get("price_max"))
+    # Sahibinden araç sayfalarında a5 yıl, a4 kilometre filtresi olarak kullanılır.
+    if _as_int(search.get("year_min")):
+        params["a5_min"] = _as_int(search.get("year_min"))
+    if _as_int(search.get("year_max")):
+        params["a5_max"] = _as_int(search.get("year_max"))
+    if _as_int(search.get("km_max")):
+        params["a4_max"] = _as_int(search.get("km_max"))
+    params["sorting"] = "date_desc"
+    return params
+
+
+def _with_query(url, params):
+    params = {k: v for k, v in (params or {}).items() if v not in (None, "")}
+    if not params:
+        return url
+    sep = "&" if "?" in url else "?"
+    return url + sep + urlencode(params, doseq=True)
+
+
+def _sahibinden_url_v12(search, filtered=True):
+    path = _sahibinden_full_slug(search)
+    city = _url_city_suffix(search)
+    parts = [path]
+    if city:
+        parts.append(city)
+    fuel = _fuel_segment(search)
+    if fuel:
+        parts.append(fuel)
+    gear = _gear_segment(search)
+    if gear:
+        parts.append(gear)
+    # İkinci el filtresi. Bazı eski URL'lerde olmayabilir ama modern filtre yolunda çalışır.
+    parts.append("ikinci-el")
+    url = "https://www.sahibinden.com/" + "/".join([p.strip("/") for p in parts if p])
+    return _with_query(url, _sahibinden_filter_params(search) if filtered else {"sorting": "date_desc"})
+
+
+def _generic_filter_params(search):
+    params = {}
+    if _as_int(search.get("price_min")): params["price_min"] = _as_int(search.get("price_min"))
+    if _as_int(search.get("price_max")): params["price_max"] = _as_int(search.get("price_max"))
+    if _as_int(search.get("year_min")): params["year_min"] = _as_int(search.get("year_min"))
+    if _as_int(search.get("year_max")): params["year_max"] = _as_int(search.get("year_max"))
+    if _as_int(search.get("km_max")): params["km_max"] = _as_int(search.get("km_max"))
+    if (search.get("gear") or "Farketmez") != "Farketmez": params["gear"] = search.get("gear")
+    if (search.get("fuel") or "Farketmez") != "Farketmez": params["fuel"] = search.get("fuel")
+    return params
+
+
+def build_search_url(source_def, search, open_url=False):
+    key = source_def.get("key")
+    q = quote_plus(_exact_query_text(search))
+    slugq = _q_slug(search)
+    city = _url_city_suffix(search)
+
+    if key == "sahibinden":
+        return _sahibinden_url_v12(search, filtered=True)
+
+    if key == "arabam":
+        slug = _arabam_full_slug(search)
+        if city:
+            slug += f"-{city}"
+        url = f"https://www.arabam.com/ikinci-el/{_arabam_category(search)}/{slug}"
+        # Arabam bu parametrelerin bir kısmını yoksayabilir; uygulama içi liste yine kendi filtresini uygular.
+        return _with_query(url, _generic_filter_params(search))
+
+    if key == "letgo":
+        return f"https://www.letgo.com/tr-tr/q-{slugq}"
+
+    if key == "facebook":
+        return f"https://www.facebook.com/marketplace/search/?query={q}"
+
+    if key == "vavacars":
+        return f"https://tr.vava.cars/cars-for-you?search={q}"
+
+    if key == "otoplus":
+        return _with_query("https://www.otoplus.com" + _otoplus_path(search), _generic_filter_params(search))
+
+    if key == "otokoc":
+        return _with_query(_otokoc_model_url(search), _generic_filter_params(search))
+
+    if key == "arabasepeti":
+        return _with_query(_arabasepeti_search_url(search), _generic_filter_params(search))
+
+    if key == "arabalar":
+        return _with_query(_arabalar_model_url(search), _generic_filter_params(search))
+
+    return source_def.get("base", "")
+
+
+def build_backup_search_url(source_def, search):
+    key = source_def.get("key")
+    if key == "sahibinden":
+        # Kullanıcıya gösterilen yedek link de Google değil, geniş Sahibinden sayfası olsun.
+        return _sahibinden_url_v12(search, filtered=False)
+    if key == "arabam":
+        return f"https://www.arabam.com/ikinci-el/{_arabam_category(search)}/{_brand_model_path(search)}"
+    if key == "letgo":
+        return "https://www.letgo.com/araba_c15705"
+    if key == "facebook":
+        return "https://www.facebook.com/marketplace/category/vehicles/"
+    if key == "vavacars":
+        return "https://tr.vava.cars/cars-for-you"
+    if key == "otoplus":
+        return f"https://www.otoplus.com/{_bslug(search)}/{_mslug(search)}" if _bslug(search) and _mslug(search) else "https://www.otoplus.com/ikinci-el-araba"
+    if key == "otokoc":
+        return f"https://www.otokocikinciel.com/ikinci-el-{_bslug(search)}" if _bslug(search) else "https://www.otokocikinciel.com/"
+    if key == "arabasepeti":
+        return "https://www.arabasepeti.com/ikinci-el-araclar"
+    if key == "arabalar":
+        return f"https://www.arabalar.com.tr/{_bslug(search)}" if _bslug(search) else "https://www.arabalar.com.tr/"
+    return source_def.get("base", "")
+
+
+def _gear_contradicts(text, search):
+    gear = normalize_text(search.get("gear", ""))
+    if not gear or gear == "farketmez":
+        return False
+    hay = normalize_text(text or "")
+    if "otomatik" in gear:
+        # Manuel açıkça yazıyorsa ele; dsg/yari otomatik/otomatik kabul.
+        return "manuel" in hay and not any(x in hay for x in ["otomatik", "yari otomatik", "dsg", "edc", "cvt"])
+    if "manuel" in gear:
+        return any(x in hay for x in ["otomatik", "yari otomatik", "dsg", "edc", "cvt"]) and "manuel" not in hay
+    return False
+
+
+def _fuel_contradicts(text, search):
+    fuel = normalize_text(search.get("fuel", ""))
+    if not fuel or fuel == "farketmez":
+        return False
+    hay = normalize_text(text or "")
+    known = ["benzin", "lpg", "dizel", "hibrit", "elektrik"]
+    if not any(k in hay for k in known):
+        return False
+    if "benzin" in fuel and "lpg" in fuel:
+        return not ("lpg" in hay or "benzin" in hay)
+    if "benzin" in fuel:
+        return "benzin" not in hay
+    if "dizel" in fuel:
+        return "dizel" not in hay
+    if "hibrit" in fuel:
+        return "hibrit" not in hay
+    if "elektrik" in fuel:
+        return "elektrik" not in hay
+    return False
+
+
+def passes_filters(item, search):
+    hay = normalize_text((item.get("title") or "") + " " + (item.get("raw_text") or "") + " " + (item.get("url") or ""))
+    assume_identity = bool(item.get("assume_identity"))
+    loose_backup = bool(item.get("loose_backup"))
+    if not assume_identity:
+        brand = normalize_text(search.get("brand", ""))
+        model_words = [w for w in normalize_text(search.get("model", "")).replace("-", " ").split() if w]
+        if brand and brand not in hay and tr_slug(search.get("brand", "")) not in hay:
+            return False
+        if model_words and not all(w in hay for w in model_words[:2]):
+            return False
+        if not package_matches(item, search):
+            return False
+    if _gear_contradicts(hay, search) or _fuel_contradicts(hay, search):
+        return False
+
+    price = item.get("price")
+    if search.get("price_min") or search.get("price_max"):
+        if price is None and not loose_backup:
+            return False
+        if price is not None:
+            if search.get("price_min") and price < search["price_min"]: return False
+            if search.get("price_max") and price > search["price_max"]: return False
+
+    year = item.get("year")
+    if search.get("year_min") or search.get("year_max"):
+        if year is None and not loose_backup:
+            return False
+        if year is not None:
+            if search.get("year_min") and year < search["year_min"]: return False
+            if search.get("year_max") and year > search["year_max"]: return False
+
+    km = item.get("km")
+    if search.get("km_max"):
+        if km is None and not loose_backup:
+            return False
+        if km is not None and km > search["km_max"]: return False
+    return True
+
+
+def _good_href_for_source(source_def, href):
+    h = href or ""
+    key = source_def.get("key")
+    low = h.lower()
+    if key == "sahibinden": return "/ilan/vasita" in low or "/ilan/" in low
+    if key == "arabam": return "/ilan/" in low or ("/ikinci-el/" in low and "?" not in low and len(low) > 35)
+    if key == "otoplus": return "sahibinden-" in low or "ikinci-el" in low or re.search(r"\d+km.*\d+tl", low) is not None
+    if key == "letgo": return "/item/" in low or "/ilan" in low
+    return any(x in low for x in ["/ilan/", "/item/", "sahibinden-", "ikinci-el"])
+
+
+def _item_from_block_v12(source_def, block, search, search_url):
+    text = block.get_text("\n", strip=True) if hasattr(block, "get_text") else str(block)
+    text = re.sub(r"[ \t]+", " ", text)
+    if not text or len(text) < 12:
+        return None
+    if len(text) > 3500:
+        return None
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ", x).strip()]
+    title = _title_from_lines(lines, search)
+    url = _best_url(block, source_def, search_url)
+    item = {
+        "source_key": source_def["key"],
+        "source_name": source_def["name"],
+        "title": title[:220],
+        "url": url,
+        "price": extract_price(text),
+        "year": extract_year(text),
+        "km": extract_km(text),
+        "city": _extract_city_from_text(text),
+        "raw_text": text[:2500],
+        # Marka/model/paket zaten kaynak URL'sinde seçildiği için satır metninde yazmıyorsa eleme yapma.
+        "assume_identity": source_def.get("key") in {"sahibinden", "arabam", "otoplus", "otokoc", "arabasepeti"},
+    }
+    return item if passes_filters(item, search) else None
+
+
+def _text_fallback_items(source_def, soup, search, search_url, limit):
+    text = soup.get_text("\n", strip=True)
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ").strip()]
+    results, seen = [], set()
+    model = normalize_text(search.get("model", ""))
+    pkg_tokens = _important_pkg_tokens(search)
+    for i, line in enumerate(lines):
+        window = "\n".join(lines[i:i+14])
+        nw = normalize_text(window)
+        if model and model not in nw and not any(t in nw for t in pkg_tokens):
+            continue
+        if not extract_price(window):
+            continue
+        title = _title_from_lines(lines[i:i+7], search)
+        synthetic_url = search_url + "#" + hashlib.sha1(window.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        item = {
+            "source_key": source_def["key"], "source_name": source_def["name"],
+            "title": title[:220], "url": synthetic_url,
+            "price": extract_price(window), "year": extract_year(window), "km": extract_km(window),
+            "city": _extract_city_from_text(window), "raw_text": window[:2500],
+            "assume_identity": source_def.get("key") in {"sahibinden", "arabam", "otoplus", "otokoc", "arabasepeti"},
+        }
+        k = item_key_for(item["url"], item["title"])
+        if k in seen: continue
+        if passes_filters(item, search):
+            seen.add(k); results.append(item)
+        if len(results) >= limit: break
+    return results
+
+
+def parse_search_page(source_def, html, search, limit=50):
+    soup = BeautifulSoup(html or "", "html.parser")
+    search_url = build_search_url(source_def, search)
+    selectors = [
+        "tr.searchResultsItem", "tr[class*='searchResultsItem']", "tr[class*='listing']",
+        "li[class*='listing']", "li[class*='search']", "article", "div[class*='listing']",
+        "div[class*='card']", "div[class*='vehicle']", "div[class*='product']",
+        "a[href*='/ilan/vasita']", "a[href*='/ilan/']", "a[href*='sahibinden-']", "a[href*='/item/']"
+    ]
+    candidates = []
+    for sel in selectors:
+        try:
+            candidates.extend(soup.select(sel))
+        except Exception:
+            pass
+    if not candidates:
+        candidates = soup.find_all(["tr", "li", "article", "a"], href=True) + soup.find_all(["tr", "li", "article"])
+    results, seen = [], set()
+    for block in candidates:
+        item = _item_from_block_v12(source_def, block, search, search_url)
+        if not item:
+            continue
+        k = item_key_for(item["url"], item["title"])
+        if k in seen:
+            continue
+        seen.add(k)
+        results.append(item)
+        if len(results) >= limit:
+            break
+    if not results:
+        results = _text_fallback_items(source_def, soup, search, search_url, limit)
+    return results[:limit]
+
+
+def _parse_sahibinden_text_results(text, search, source_name="Sahibinden / reader", limit=50):
+    results, seen = [], set()
+    if not text:
+        return results
+    # Markdown linkleri ve düz URL'leri yakala. Her link çevresindeki metinden fiyat/km/yıl çıkar.
+    link_re = re.compile(r"\[([^\]]{3,220})\]\((https?://[^)\s]*sahibinden\.com/ilan/vasita[^)\s]+)\)|(?P<url>https?://[^\s)]+sahibinden\.com/ilan/vasita[^\s)]+)", re.I)
+    for m in link_re.finditer(text):
+        title = (m.group(1) or "Sahibinden ilanı").strip()
+        url = (m.group(2) or m.group("url") or "").strip().rstrip(".")
+        start = max(0, m.start() - 500)
+        end = min(len(text), m.end() + 900)
+        window = text[start:end]
+        item = {
+            "source_key": "sahibinden",
+            "source_name": source_name,
+            "title": re.sub(r"\s+", " ", title)[:220],
+            "url": url,
+            "price": extract_price(window),
+            "year": extract_year(window),
+            "km": extract_km(window),
+            "city": _extract_city_from_text(window),
+            "raw_text": window[:2500],
+            "assume_identity": True,
+        }
+        k = item_key_for(item["url"], item["title"])
+        if k in seen:
+            continue
+        if passes_filters(item, search):
+            seen.add(k); results.append(item)
+        if len(results) >= limit:
+            break
+    return results
+
+
+def _fetch_jina_reader(url, timeout=35):
+    reader_url = "https://r.jina.ai/" + url
+    headers = {
+        "User-Agent": "Mozilla/5.0 AraçAvcisi/1.0",
+        "Accept": "text/plain, text/markdown, */*",
+        "X-Return-Format": "markdown",
+    }
+    return requests.get(reader_url, headers=headers, timeout=timeout)
+
+
+def fetch_sahibinden_index_backup(source_def, search, limit=30):
+    # 1) Önce public reader ile tam hedef URL'yi dene. Bu, normal istek 429 verdiğinde
+    # bazen sayfadaki public ilan metnini markdown olarak döndürür.
+    direct_url = build_search_url(source_def, search)
+    try:
+        rr = _fetch_jina_reader(direct_url)
+        if rr.status_code < 400 and rr.text:
+            items = _parse_sahibinden_text_results(rr.text, search, "Sahibinden / reader", limit=limit)
+            if items:
+                return items, {"source": "Sahibinden / reader", "url": direct_url, "status": f"ok / liste: {len(items)}", "status_code": 200}
+    except Exception as exc:
+        reader_err = f"reader hata: {exc.__class__.__name__}"
+    else:
+        reader_err = f"reader HTTP {getattr(rr, 'status_code', None)}"
+
+    # 2) Sonra Jina Search üzerinden sahibinden.com/ilan indeksini dene.
+    results, seen = [], set()
+    last_status = reader_err
+    for q in _sahibinden_backup_queries(search):
+        try:
+            search_url = "https://s.jina.ai/" + quote_plus(q)
+            resp = requests.get(search_url, headers={"User-Agent": "Mozilla/5.0 AraçAvcisi/1.0"}, timeout=35)
+            last_status = resp.status_code
+            if resp.status_code >= 400:
+                continue
+            items = _parse_sahibinden_text_results(resp.text, search, "Sahibinden / indeks", limit=limit)
+            for item in items:
+                k = item_key_for(item["url"], item["title"])
+                if k not in seen:
+                    seen.add(k); results.append(item)
+                if len(results) >= limit:
+                    break
+            if len(results) >= limit:
+                break
+        except Exception as exc:
+            last_status = f"indeks hata: {exc.__class__.__name__}"
+            continue
+        time.sleep(0.4)
+    status = "ok" if results else f"Sahibinden yedek listede ilan bulunamadı ({last_status})"
+    return results[:limit], {
+        "source": "Sahibinden / yedek liste",
+        "url": direct_url,
+        "status": f"{status} / liste: {len(results)}",
+        "status_code": 200 if results else None,
+    }
+
+
+def fetch_source(source_def, search, limit=50):
+    url = build_search_url(source_def, search)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122 Safari/537.36",
+        "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Cache-Control": "no-cache",
+    }
+    key = source_def.get("key")
+    status_code = None
+    try:
+        if source_def.get("mode") == "guarded":
+            time.sleep(1.0)
+        resp = requests.get(url, headers=headers, timeout=30, allow_redirects=True)
+        status_code = resp.status_code
+        direct_status = f"HTTP {resp.status_code}"
+        if resp.status_code < 400:
+            results = parse_search_page(source_def, resp.text, search, limit=limit)
+            if results:
+                return results, {"source": source_def["name"], "url": url, "status": f"{direct_status} / liste: {len(results)}", "status_code": resp.status_code}
+            if key == "sahibinden":
+                bitems, blog = fetch_sahibinden_index_backup(source_def, search, limit=limit)
+                blog["status"] = f"{direct_status} / direkt liste yok / {blog.get('status','')}"
+                return bitems, blog
+            return [], {"source": source_def["name"], "url": url, "status": f"{direct_status} / liste: 0", "status_code": resp.status_code}
+        if key == "sahibinden":
+            bitems, blog = fetch_sahibinden_index_backup(source_def, search, limit=limit)
+            blog["primary_status"] = direct_status
+            blog["primary_status_code"] = resp.status_code
+            blog["status"] = f"{direct_status} / doğrudan engel / {blog.get('status','')}"
+            blog["status_code"] = 200 if bitems else resp.status_code
+            return bitems, blog
+        return [], {"source": source_def["name"], "url": url, "status": direct_status, "status_code": resp.status_code}
+    except Exception as exc:
+        if key == "sahibinden":
+            bitems, blog = fetch_sahibinden_index_backup(source_def, search, limit=limit)
+            blog["primary_status"] = f"Hata: {exc.__class__.__name__}"
+            blog["status"] = f"Hata: {exc.__class__.__name__} / {blog.get('status','')}"
+            blog["status_code"] = 200 if bitems else status_code
+            return bitems, blog
+        return [], {"source": source_def["name"], "url": url, "status": f"Hata: {exc.__class__.__name__}: {exc}", "status_code": status_code}
+
+
+def health_v12():
+    return jsonify({
+        "ok": True,
+        "version": V8_VERSION,
+        "time": now_iso(),
+        "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
+        "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
+        "sahibinden_list_mode": "direct_then_reader_then_index",
+        "filters": "price/year/km/gear applied in URL where supported and inside list parser",
+    })
+app.view_functions["health"] = health_v12
+
+
 # Cloud deploys import app:app with gunicorn. The scheduler and database must start on import.
 boot_app()
 

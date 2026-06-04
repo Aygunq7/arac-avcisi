@@ -1,4 +1,4 @@
-const CACHE = 'arac-avcisi-v11';
+const CACHE = 'arac-avcisi-v12';
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(['/', '/static/app.css?v=11', '/static/app.js?v=11', '/static/manifest.json', '/static/icon.svg'])));
