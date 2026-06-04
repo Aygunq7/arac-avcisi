@@ -263,7 +263,7 @@ async function showItems(id, forceOpen=false) {
   box.innerHTML = '<div class="item"><strong>Liste yükleniyor...</strong></div>';
   const list = await api(`/api/searches/${id}/items`);
   if (!list.length) {
-    box.innerHTML = '<div class="item"><strong>Henüz ilan yakalanmadı.</strong><small>Kaynaklar otomatik okunamadıysa önce 'Şimdi kontrol et' yap. Linkler artık ana sayfa yerine doğru marka/model/paket sayfasına veya site içi aramaya gider.</small></div>';
+    box.innerHTML = `<div class="item"><strong>Henüz ilan yakalanmadı.</strong><small>Kaynaklar otomatik okunamadıysa önce <b>Şimdi kontrol et</b> yap. Linkler artık ana sayfa yerine doğru marka/model/paket sayfasına veya site içi aramaya gider.</small></div>`;
     return;
   }
   const groups = new Map();

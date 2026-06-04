@@ -1458,7 +1458,7 @@ def boot_app():
 # Bu blok boot_app() çağrısından önce çalışır. Böylece Render ayağa kalkarken
 # yeni link üretici ve yeni parser aktif olur.
 
-V8_VERSION = "v8-link-ve-liste-net-duzeltme"
+V8_VERSION = "v9-secim-kutulari-duzeltildi"
 
 SUV_MODELS = {
     "Tiguan", "T-Roc", "Taigo", "Kuga", "Puma", "Compass", "Renegade", "Avenger",

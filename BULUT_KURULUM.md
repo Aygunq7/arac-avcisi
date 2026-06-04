@@ -87,4 +87,8 @@ Bu sürümde arama sonucu yakalanan ilanlar takip kartı altında kaynak/site ba
 
 
 ## v8 notu
-Bu sürümde site aç butonlarının ana sayfaya düşmesi azaltıldı. Sahibinden, Arabam ve Otoplus için marka/model/paket URL yapısı düzeltildi; liste yakalama parserı genişletildi. Deploy sonrası /health içinde v8-link-ve-liste-net-duzeltme görünmelidir.
+Bu sürümde site aç butonlarının ana sayfaya düşmesi azaltıldı. Sahibinden, Arabam ve Otoplus için marka/model/paket URL yapısı düzeltildi; liste yakalama parserı genişletildi. Deploy sonrası /health içinde v9-secim-kutulari-duzeltildi görünmelidir.
+
+
+## v9 düzeltmesi
+Seçim kutularının boş kalmasına neden olan JavaScript tırnak hatası düzeltildi. Cache sürümü v9 yapıldı.
