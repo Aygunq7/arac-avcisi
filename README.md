@@ -82,14 +82,3 @@ Letgo, Facebook Marketplace, VavaCars, Otokoç 2. El, Araba Sepeti ve Arabalar.c
 
 ## v11
 Sahibinden için liste modu eklendi. Sistem önce doğrudan Sahibinden sayfasını dener; 429/403 veya boş liste olursa arka planda arama motoru indeksindeki sahibinden.com/ilan bağlantılarını bulup listeye eklemeyi dener. Bu yöntem resmi API değildir ve tam liste garantisi vermez, fakat uygulama içinde Sahibinden ilan bağlantılarının görünmesini sağlar.
-
-
-## v12
-
-- Fiyat, yıl, km ve vites filtreleri Sahibinden linkine eklendi.
-- Liste parserı doğrudan kategori sayfalarında marka/model satırda görünmese bile doğru eleme yapacak şekilde düzeltildi.
-- Sahibinden 429 verirse public reader + indeks yedeği denenir. CAPTCHA/giriş/engel aşma yapılmaz.
-
-## v15 - Hatalı sonuç filtresi
-
-Bu sürüm, genel sayfa/filtre metinlerinin ilan gibi kaydedilmesini engeller. Özellikle Otoplus gibi JS ağırlıklı sayfalarda "Filtrele", "garantili 2. el araçlar" gibi metinler artık listeye araç olarak düşmez. Sadece gerçek ilan linki veya güçlü marka/model/paket kanıtı olan sonuçlar kaydedilir.
