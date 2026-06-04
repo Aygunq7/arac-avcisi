@@ -96,3 +96,7 @@ Seçim kutularının boş kalmasına neden olan JavaScript tırnak hatası düze
 
 ## v10
 Letgo, Facebook Marketplace, VavaCars, Otokoç 2. El, Araba Sepeti ve Arabalar.com butonları Google yerine ilgili sitenin kendi arama/model sayfasına gidecek şekilde düzeltildi. Arka plan liste yakalama için arama motoru yedek taraması ayrı tutuldu.
+
+## v15 notu
+
+GitHub'a app.py, templates, static, README.md ve BULUT_KURULUM.md dosyalarını tekrar yükleyip Render'da deploy et. /health ekranında `v15-hatali-sonuc-filtresi` görünmelidir.

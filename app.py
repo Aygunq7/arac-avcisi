@@ -2841,6 +2841,333 @@ def health_v12():
 app.view_functions["health"] = health_v12
 
 
+
+# -----------------------------------------------------------------------------
+# v15: Hatalı sonuç temizleme + gerçek ilan filtresi
+# -----------------------------------------------------------------------------
+# v14'te bazı JS ağırlıklı sitelerin genel liste/filtre metinleri ilan gibi
+# algılanabiliyordu. Bu sürüm yanlış pozitifleri temizler: sadece gerçek ilan
+# linki veya güçlü araç kanıtı olan sonuçlar kaydedilir.
+V8_VERSION = "v15-hatali-sonuc-filtresi"
+
+
+def _search_int(search, key):
+    return _as_int(search.get(key))
+
+
+def _contains_brand_model_or_package(text, search):
+    hay = normalize_text(text or "")
+    brand = normalize_text(search.get("brand", ""))
+    model = normalize_text(search.get("model", ""))
+    pkg_tokens = _important_pkg_tokens(search)
+    if brand and brand in hay and model and model in hay:
+        return True
+    if model and model in hay and any(t in hay for t in pkg_tokens):
+        return True
+    if tr_slug(search.get("brand", "")) in hay and tr_slug(search.get("model", "")) in hay:
+        return True
+    return False
+
+
+def _bad_listing_title(title):
+    t = normalize_text(title or "")
+    if not t:
+        return True
+    bad_fragments = [
+        "filtrele", "siralama", "siralama", "arama", "sonuc bulunamadi",
+        "garantili 2 el", "garantili ikinci el", "araclari listeleniyor",
+        "otoplusun", "otoplus un", "tum araclar", "ikinci el araba",
+        "fiyat", "kilometre", "model yili", "vites", "yakit", "renk",
+        "cerez", "gizlilik", "kisisel veriler", "giris yap", "uye ol",
+        "anasayfa", "iletisim", "kampanya", "kredi", "sigorta", "favoriler",
+    ]
+    if any(b in t for b in bad_fragments):
+        return True
+    # Tek kelimelik / çok genel başlıklar ilan değildir.
+    if len(t) < 8:
+        return True
+    return False
+
+
+def _is_real_listing_url(source_def, url):
+    if not url:
+        return False
+    parsed = urlparse(url)
+    path = (parsed.path or "").lower()
+    full = url.lower()
+    key = source_def.get("key")
+    # Arama/kategori URL'sini veya sentetik çapa URL'sini gerçek ilan sayma.
+    if "#" in url:
+        return False
+    if key == "sahibinden":
+        return "/ilan/" in path
+    if key == "arabam":
+        return "/ilan/" in path
+    if key == "letgo":
+        return "/item/" in path or "/ilan/" in path
+    if key == "otoplus":
+        # Otoplus liste/kategori sayfaları /volkswagen/tiguan/... olabilir; ilan gibi
+        # kaydetme. Gerçek kart linklerinde genelde sahiplendiren/sahibinden tarzı
+        # özgül parça veya uzun stok detayı bulunur. Emin değilsek kaydetmeyelim.
+        if any(x in full for x in ["sahibinden-", "arac-detay", "araclar/", "otomobil/"]):
+            return True
+        return False
+    if key == "otokoc":
+        return any(x in path for x in ["/ikinci-el-arac/", "/arac-detay", "/detay"])
+    if key == "vavacars":
+        return any(x in path for x in ["/cars-for-you/", "/car/", "/detail"])
+    if key == "arabasepeti":
+        return any(x in path for x in ["/ilan/", "/arac/", "/detay"])
+    if key == "arabalar":
+        return any(x in path for x in ["/ilan/", "/araba/", "/detay"])
+    return any(x in path for x in ["/ilan/", "/item/", "/detail", "/detay"])
+
+
+def _good_href_for_source(source_def, href):
+    if not href:
+        return False
+    full = urljoin(source_def.get("base", ""), href).split("#")[0]
+    return _is_real_listing_url(source_def, full)
+
+
+def passes_filters(item, search):
+    hay = normalize_text((item.get("title") or "") + " " + (item.get("raw_text") or "") + " " + (item.get("url") or ""))
+    source_key = item.get("source_key") or ""
+    loose_backup = bool(item.get("loose_backup"))
+    source_def = next((s for s in SOURCE_DEFS if s.get("key") == source_key), {"key": source_key, "base": item.get("url", "")})
+
+    # Genel sayfa/filtre metinlerini ilan gibi kaydetme.
+    if _bad_listing_title(item.get("title")):
+        return False
+
+    real_url = _is_real_listing_url(source_def, item.get("url"))
+    strong_identity = _contains_brand_model_or_package((item.get("title") or "") + " " + (item.get("raw_text") or "") + " " + (item.get("url") or ""), search)
+    if not real_url and not strong_identity:
+        return False
+
+    # Marka/model/paket uyuşmazlığını ele. Gerçek URL varsa bile tamamen alakasız başlıkları alma.
+    brand = normalize_text(search.get("brand", ""))
+    model_words = [w for w in normalize_text(search.get("model", "")).replace("-", " ").split() if w]
+    if not strong_identity and not bool(item.get("assume_identity")):
+        if brand and brand not in hay and tr_slug(search.get("brand", "")) not in hay:
+            return False
+        if model_words and not all(w in hay for w in model_words[:2]):
+            return False
+    if not package_matches(item, search) and not loose_backup:
+        return False
+
+    if _gear_contradicts(hay, search) or _fuel_contradicts(hay, search):
+        return False
+
+    price_min = _search_int(search, "price_min")
+    price_max = _search_int(search, "price_max")
+    year_min = _search_int(search, "year_min")
+    year_max = _search_int(search, "year_max")
+    km_max = _search_int(search, "km_max")
+
+    price = _as_int(item.get("price"))
+    if price_min or price_max:
+        if price is None and not loose_backup:
+            return False
+        if price is not None:
+            if price_min and price < price_min:
+                return False
+            if price_max and price > price_max:
+                return False
+
+    year = _as_int(item.get("year"))
+    if year_min or year_max:
+        if year is None and not loose_backup:
+            return False
+        if year is not None:
+            if year_min and year < year_min:
+                return False
+            if year_max and year > year_max:
+                return False
+
+    km = _as_int(item.get("km"))
+    if km_max:
+        if km is None and not loose_backup:
+            return False
+        if km is not None and km > km_max:
+            return False
+
+    return True
+
+
+def _best_url(block, source_def, search_url):
+    # Sadece gerçek ilan linki yakalanır. Bulunamazsa boş döndürülür;
+    # kategori/listing sayfalarını ilan URL'si gibi kaydetmeyelim.
+    for a in block.find_all("a", href=True) if hasattr(block, "find_all") else []:
+        href = a.get("href", "").strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+        full = urljoin(source_def.get("base", ""), href).split("#")[0]
+        host = urlparse(full).netloc.replace("www.", "")
+        base_host = urlparse(source_def.get("base", "")).netloc.replace("www.", "")
+        if base_host and base_host not in host:
+            continue
+        if _is_real_listing_url(source_def, full):
+            return full
+    return ""
+
+
+def _item_from_block_v12(source_def, block, search, search_url):
+    text = block.get_text("\n", strip=True) if hasattr(block, "get_text") else str(block)
+    text = re.sub(r"[ \t]+", " ", text or "")
+    if not text or len(text) < 20 or len(text) > 3500:
+        return None
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ", x).strip()]
+    title = _title_from_lines(lines, search)
+    url = _best_url(block, source_def, search_url)
+    if not url and source_def.get("key") in {"otoplus", "vavacars", "otokoc", "arabasepeti", "arabalar", "letgo", "facebook"}:
+        # Bu kaynaklarda gerçek link yoksa metin bloğu genelde filtre/anasayfa oluyor.
+        return None
+    if not url:
+        return None
+    item = {
+        "source_key": source_def["key"],
+        "source_name": source_def["name"],
+        "title": title[:220],
+        "url": url,
+        "price": extract_price(text),
+        "year": extract_year(text),
+        "km": extract_km(text),
+        "city": _extract_city_from_text(text),
+        "raw_text": text[:2500],
+        "assume_identity": False,
+    }
+    return item if passes_filters(item, search) else None
+
+
+def _text_fallback_items(source_def, soup, search, search_url, limit):
+    # Fallback sadece gerçek ilan linki yakalanabilen sayfalarda kullanılır. Aksi halde
+    # "Filtrele", "garantili 2. el" gibi UI metinleri ilan sanılabiliyor.
+    key = source_def.get("key")
+    if key in {"otoplus", "vavacars", "otokoc", "arabasepeti", "arabalar", "letgo", "facebook"}:
+        return []
+    text = soup.get_text("\n", strip=True)
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ", x).strip()]
+    results, seen = [], set()
+    for i, line in enumerate(lines):
+        window = "\n".join(lines[i:i+10])
+        if not _contains_brand_model_or_package(window, search):
+            continue
+        if not extract_price(window):
+            continue
+        title = _title_from_lines(lines[i:i+6], search)
+        if _bad_listing_title(title):
+            continue
+        synthetic_url = search_url + "#" + hashlib.sha1(window.encode("utf-8", errors="ignore")).hexdigest()[:12]
+        item = {
+            "source_key": source_def["key"], "source_name": source_def["name"],
+            "title": title[:220], "url": synthetic_url,
+            "price": extract_price(window), "year": extract_year(window), "km": extract_km(window),
+            "city": _extract_city_from_text(window), "raw_text": window[:2500],
+            "assume_identity": False,
+        }
+        k = item_key_for(item["url"], item["title"])
+        if k in seen:
+            continue
+        if passes_filters(item, search):
+            seen.add(k); results.append(item)
+        if len(results) >= limit:
+            break
+    return results
+
+
+
+
+def _row_item_for_filter(row):
+    d = dict(row)
+    return {
+        "source_key": d.get("source_key"),
+        "source_name": d.get("source_name"),
+        "title": d.get("title"),
+        "url": d.get("url"),
+        "price": d.get("current_price"),
+        "year": d.get("year"),
+        "km": d.get("km"),
+        "city": d.get("city"),
+        "raw_text": d.get("raw_text") or d.get("title") or "",
+        "assume_identity": False,
+    }
+
+
+def _cleanup_bad_items_for_search(conn, search):
+    # Eski sürümlerde kaydedilmiş sahte sonuçları da temizle. Böylece v15'e geçince
+    # "Filtrele" gibi eski kayıtlar listede kalmaz.
+    rows = conn.execute("SELECT * FROM items WHERE search_id=?", (search["id"],)).fetchall()
+    bad_ids = []
+    for r in rows:
+        item = _row_item_for_filter(r)
+        try:
+            if not passes_filters(item, search):
+                bad_ids.append(r["id"])
+        except Exception:
+            bad_ids.append(r["id"])
+    if bad_ids:
+        conn.executemany("DELETE FROM items WHERE id=?", [(i,) for i in bad_ids])
+        conn.commit()
+    return len(bad_ids)
+
+
+def list_searches_v15():
+    conn = db()
+    rows = conn.execute("SELECT * FROM searches ORDER BY id DESC").fetchall()
+    data = []
+    source_map = {s["key"]: s for s in SOURCE_DEFS}
+    for r in rows:
+        d = dict(r)
+        try:
+            _cleanup_bad_items_for_search(conn, d)
+        except Exception:
+            pass
+        d["sources"] = json.loads(d.pop("sources_json"))
+        d["source_links"] = [
+            {
+                "key": key,
+                "name": source_map.get(key, {"name": key}).get("name"),
+                "url": build_search_url(source_map[key], d, open_url=True) if key in source_map else "",
+                "backup_url": build_backup_search_url(source_map[key], d) if key in source_map and source_map[key].get("backup") else "",
+                "note": source_map.get(key, {}).get("note", ""),
+            }
+            for key in d["sources"] if key in source_map
+        ]
+        count_rows = conn.execute(
+            "SELECT source_name, COUNT(*) AS count FROM items WHERE search_id=? GROUP BY source_name ORDER BY source_name",
+            (d["id"],),
+        ).fetchall()
+        d["item_count"] = sum(int(cr["count"]) for cr in count_rows)
+        d["source_item_counts"] = [dict(cr) for cr in count_rows]
+        data.append(d)
+    conn.close()
+    return jsonify(data)
+app.view_functions["list_searches"] = list_searches_v15
+
+
+def list_items_v15(search_id):
+    conn = db()
+    search = load_search(conn, search_id)
+    if search:
+        _cleanup_bad_items_for_search(conn, search)
+    rows = conn.execute("SELECT * FROM items WHERE search_id=? ORDER BY last_seen_at DESC LIMIT 300", (search_id,)).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+app.view_functions["list_items"] = list_items_v15
+
+def health_v15():
+    return jsonify({
+        "ok": True,
+        "version": V8_VERSION,
+        "time": now_iso(),
+        "default_interval_hours": DEFAULT_CHECK_INTERVAL_HOURS,
+        "scheduler_tick_minutes": SCHEDULER_TICK_MINUTES,
+        "result_filter": "only real listing URLs or strong brand/model/package evidence",
+        "wrong_result_fix": "generic filter/category blocks removed",
+    })
+app.view_functions["health"] = health_v15
+
 # Cloud deploys import app:app with gunicorn. The scheduler and database must start on import.
 boot_app()
 
