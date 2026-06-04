@@ -2363,7 +2363,7 @@ app.view_functions["health"] = health_v11
 # Bu sürümde siteye açılan linklerde fiyat/yıl/km/vites filtreleri URL'ye eklenir.
 # Sahibinden doğrudan 429 verirse, isteğe bağlı üçüncü taraf reader ve arama indeksinden
 # yalnızca public ilan linkleri denenir. CAPTCHA/giriş/engel aşma yapılmaz.
-V8_VERSION = "v13-islem-basarisiz-duzeltildi"
+V8_VERSION = "v14-liste-hatasi-duzeltildi"
 
 
 def _as_int(value):
@@ -2632,7 +2632,7 @@ def _item_from_block_v12(source_def, block, search, search_url):
 
 def _text_fallback_items(source_def, soup, search, search_url, limit):
     text = soup.get_text("\n", strip=True)
-    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ").strip()]
+    lines = [re.sub(r"\s+", " ", x).strip() for x in text.splitlines() if re.sub(r"\s+", " ", x).strip()]
     results, seen = [], set()
     model = normalize_text(search.get("model", ""))
     pkg_tokens = _important_pkg_tokens(search)
