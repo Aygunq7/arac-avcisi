@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: arac-avcisi-bulut-mobil
+    name: arac-avcisi
     env: python
     plan: starter
     buildCommand: pip install -r requirements.txt
@@ -13,8 +13,8 @@ services:
         value: 4
       - key: ENABLE_SCHEDULER
         value: 1
-      - key: SECRET_KEY
-        generateValue: true
+      - key: ENABLE_READER
+        value: 1
     disk:
       name: arac-avcisi-data
       mountPath: /data
