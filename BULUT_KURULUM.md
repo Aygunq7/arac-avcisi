@@ -1,65 +1,21 @@
-# Bulut Kurulum
+# Araç Avcısı v18
 
-## GitHub
+Bu sürüm eski PWA/cache sorununu temizler ve takip kaydını önce veritabanına alır. Site taraması arka planda çalışır; kaynak hata verse bile takip kaydı kaybolmaz.
 
-ZIP’i ayıkla. Şu dosyaları repo köküne yükle:
+Deploy sonrası önce `/reset-cache` adresini açın, sonra uygulamayı normal adresten kullanın.
 
-```text
-app.py
-templates
-static
-requirements.txt
-render.yaml
-Procfile
-Dockerfile
-README.md
-BULUT_KURULUM.md
-```
+Kontrol: `/health` içinde `v18-cache-temiz-takip-garantili` görünmelidir.
 
-## Render
+# Render Kurulum / Güncelleme
 
-### Web Service ayarları
+GitHub'a ZIP içindeki tüm dosyaları yükle ve Render'da **Deploy latest commit** yap.
 
-```text
-Runtime: Python
-Build Command: pip install -r requirements.txt
-Start Command: gunicorn --workers 1 --threads 4 --timeout 120 --bind 0.0.0.0:$PORT app:app
-Health Check Path: /health
-```
+Environment önerileri:
 
-### Free plan
+- DATA_DIR=data  (Free test için)
+- DATA_DIR=/data (Starter + disk varsa)
+- ENABLE_SCHEDULER=1
+- CHECK_INTERVAL_HOURS=4
+- SECRET_KEY=uzun-bir-sifre
 
-```text
-DATA_DIR=data
-ENABLE_SCHEDULER=1
-ENABLE_READER=1
-CHECK_INTERVAL_HOURS=4
-```
-
-### Starter + Disk
-
-Disk:
-
-```text
-Mount Path: /data
-Size: 1 GB
-```
-
-Environment:
-
-```text
-DATA_DIR=/data
-ENABLE_SCHEDULER=1
-ENABLE_READER=1
-CHECK_INTERVAL_HOURS=4
-```
-
-## Kontrol
-
-Deploy sonrası aç:
-
-```text
-https://senin-linkin.onrender.com/health
-```
-
-`version: v16-temiz-calisan` görünmeli.
+Bu sürüm eski veritabanını otomatik taşır, veritabanını silmen gerekmez.

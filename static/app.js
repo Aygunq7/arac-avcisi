@@ -3,7 +3,7 @@ const $ = (q, el=document) => el.querySelector(q);
 const $$ = (q, el=document) => [...el.querySelectorAll(q)];
 function opt(v,t=v){ const o=document.createElement('option'); o.value=v; o.textContent=t; return o; }
 function badge(t, ok=false){ const s=document.createElement('span'); s.className='badge'+(ok?' ok':''); s.textContent=t; return s; }
-async function api(url, opts={}){ const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts}); const j=await r.json().catch(()=>({ok:false,error:'JSON okunamadı'})); if(!r.ok) throw new Error(j.error||'İşlem başarısız'); return j; }
+async function api(url, opts={}){ const r=await fetch(url,{cache:'no-store',headers:{'Content-Type':'application/json'},...opts}); const j=await r.json().catch(()=>({ok:false,error:'Sunucudan okunamayan cevap geldi'})); if(!r.ok) throw new Error(j.error||'İşlem başarısız'); return j; }
 async function boot(){
   catalog = await api('/api/catalog');
   fillCatalog();
@@ -12,7 +12,7 @@ async function boot(){
   $('#brand').onchange = () => { fillModels(); fillPackages(); };
   $('#model').onchange = fillPackages;
   $('#searchForm').onsubmit = createSearch;
-  if('serviceWorker' in navigator){ navigator.serviceWorker.register('/static/sw.js?v=16').catch(()=>{}); }
+  if('serviceWorker' in navigator){ /* v18: service worker kapalı, eski cache temizleniyor */ }
 }
 function fillCatalog(){
   const city=$('#city'), brand=$('#brand'), sources=$('#sources');
@@ -28,9 +28,25 @@ function fillPackages(){
   const b=$('#brand').value, m=$('#model').value, p=$('#package'); p.innerHTML=''; const list=((catalog.packages[b]||{})[m])||['Farketmez']; list.forEach(x=>p.append(opt(x)));
 }
 async function createSearch(e){
-  e.preventDefault(); const f=new FormData(e.target); const data=Object.fromEntries(f.entries()); data.sources=$$('#sources input:checked').map(x=>x.value); $('#formMsg').textContent='İlk arama yapılıyor...';
-  try{ await api('/api/searches',{method:'POST',body:JSON.stringify(data)}); $('#formMsg').textContent='Takip oluşturuldu.'; e.target.reset(); fillCatalog(); await loadSearches(); }
-  catch(err){ $('#formMsg').textContent=err.message||'İşlem başarısız'; }
+  e.preventDefault();
+  const f=new FormData(e.target);
+  const data=Object.fromEntries(f.entries());
+  data.sources=$$('#sources input:checked').map(x=>x.value);
+  const btn=$('#searchForm button[type=submit]');
+  btn.disabled=true;
+  $('#formMsg').textContent='Takip kaydediliyor...';
+  try{
+    const res=await api('/api/searches',{method:'POST',body:JSON.stringify(data)});
+    if(!res.ok) throw new Error(res.error || 'Takip kaydedilemedi');
+    $('#formMsg').textContent='Takip kaydedildi. Başlangıç araması arkada çalışıyor.';
+    e.target.reset(); fillCatalog();
+    // Kayıt başarılıysa, liste yükleme hatası artık “işlem başarısız” diye gösterilmez.
+    loadSearches().catch(err=>{ $('#formMsg').textContent='Takip kaydedildi ama liste yenilenemedi. Sayfayı yenile.'; });
+    setTimeout(()=>loadSearches().catch(()=>{}), 2500);
+    setTimeout(()=>loadSearches().catch(()=>{}), 9000);
+  }
+  catch(err){ $('#formMsg').textContent=err.message||'Takip kaydedilemedi'; }
+  finally{ btn.disabled=false; }
 }
 async function loadSearches(){
   const box=$('#searches'); box.innerHTML='<div class="empty">Yükleniyor...</div>';
@@ -47,7 +63,7 @@ function renderSearch(s){
   $('.status',card).textContent=s.last_status||'İlk arama bekleniyor';
   const links=$('.linkBtns',card);
   Object.entries(s.open_urls||{}).forEach(([k,u])=>{ const src=(catalog.sources||[]).find(x=>x.key===k); const a=document.createElement('a'); a.href=u; a.target='_blank'; a.rel='noopener'; a.textContent=(src?src.name:k)+"'de aç"; links.append(a); });
-  $('.run',card).onclick=async()=>{ $('.status',card).textContent='Kontrol ediliyor...'; const r=await api(`/api/searches/${s.id}/run`,{method:'POST',body:'{}'}); $('.status',card).textContent=r.status||'Kontrol tamamlandı'; await loadItems(s.id, $('.items',card)); await loadSearches(); };
+  $('.run',card).onclick=async()=>{ $('.status',card).textContent='Kontrol ediliyor...'; try{ const r=await api(`/api/searches/${s.id}/run`,{method:'POST',body:'{}'}); $('.status',card).textContent=r.status||r.error||'Kontrol tamamlandı'; await loadItems(s.id, $('.items',card)); }catch(err){ $('.status',card).textContent=err.message||'Kontrol başarısız'; } await loadSearches(); };
   $('.toggle',card).onclick=async()=>{ await api(`/api/searches/${s.id}/toggle`,{method:'POST',body:'{}'}); await loadSearches(); };
   $('.delete',card).onclick=async()=>{ if(confirm('Bu takibi ve kayıtlı ilanları silmek istiyor musun?')){ await api(`/api/searches/${s.id}`,{method:'DELETE'}); await loadSearches(); } };
   $('.show',card).onclick=()=>loadItems(s.id, $('.items',card));

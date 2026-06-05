@@ -1,55 +1,18 @@
-# Araç Avcısı v16 Temiz Çalışan Sürüm
+# Araç Avcısı v18
 
-Bu sürüm önceki yamaların tamamı temizlenerek sıfırdan düzenlendi. Amaç: uygulamanın çökmeden çalışması, seçim kutularının dolması, linklerin doğru üretilmesi ve listeye yalnızca gerçek ilanların düşmesi.
+Bu sürüm eski PWA/cache sorununu temizler ve takip kaydını önce veritabanına alır. Site taraması arka planda çalışır; kaynak hata verse bile takip kaydı kaybolmaz.
 
-## Özellikler
+Deploy sonrası önce `/reset-cache` adresini açın, sonra uygulamayı normal adresten kullanın.
 
-- Mobil uyumlu web/PWA panel
-- Hazır marka, model, paket/motor, şehir ve kaynak seçimi
-- Fiyat, yıl, km, yakıt, vites filtresi
-- Kullanıcı seçimli kontrol sıklığı
-- Yeni ilan ve fiyat düşüşü takibi
-- Telegram ve e-posta bildirim desteği
-- Sahibinden için direkt deneme + Jina Reader yedek okuma
-- Arabam ve Otoplus için daha temiz ilan ayrıştırma
-- Sahte sonuç filtresi: “Filtrele”, “arama”, “anasayfa” gibi metinler ilan sayılmaz
+Kontrol: `/health` içinde `v18-cache-temiz-takip-garantili` görünmelidir.
 
-## Render kurulumu
+# Araç Avcısı v17 - Kayıt ve Migration Düzeltildi
 
-1. ZIP içeriğini GitHub reposunun köküne yükle.
-2. Render servisinde `Manual Deploy > Deploy latest commit` yap.
-3. Environment kısmında en az şunlar olsun:
+Bu sürümde takip oluştururken çıkan **İşlem başarısız** hatası için iki ana düzeltme yapıldı:
 
-```text
-DATA_DIR=data
-CHECK_INTERVAL_HOURS=4
-ENABLE_SCHEDULER=1
-ENABLE_READER=1
-SECRET_KEY=arac-avcisi-gizli
-```
+1. Eski Render veritabanı tabloları otomatik yeni şemaya taşınır.
+2. Takip oluşturma artık dış sitelerin cevap vermesini beklemez; takip hemen kaydedilir, başlangıç araması arka planda başlar.
 
-Free planda `DATA_DIR=data` kullan. Starter + Disk kullanırsan `DATA_DIR=/data` yap.
+Yüklenecek dosyalar: app.py, templates, static, requirements.txt, render.yaml, Procfile, Dockerfile.
 
-## Bildirimler
-
-Telegram:
-
-```text
-TELEGRAM_BOT_TOKEN=bot token
-TELEGRAM_CHAT_ID=chat id
-```
-
-Mail:
-
-```text
-SMTP_HOST=smtp.gmail.com
-SMTP_PORT=587
-SMTP_USER=mail@gmail.com
-SMTP_PASS=gmail uygulama şifresi
-MAIL_FROM=mail@gmail.com
-MAIL_TO=mail@gmail.com
-```
-
-## Önemli not
-
-Bazı siteler otomatik liste okumayı engelleyebilir. Bu sürüm bu engelleri aşmaya çalışmaz, hesap şifresi istemez, CAPTCHA atlatmaz. Engel varsa liste boş kalabilir ama doğru site linki “...’de aç” butonuyla verilir. Sahte ilan üretmez.
+Deploy sonrası kontrol: `/health` içinde `v17-kayit-ve-migration-duzeltildi` görünmeli.

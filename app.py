@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import threading
 import sqlite3
 import hashlib
 import smtplib
@@ -18,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 load_dotenv()
 
-VERSION = "v16-temiz-calisan"
+VERSION = "v18-cache-temiz-takip-garantili"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv("DATA_DIR") or os.path.join(APP_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -29,7 +30,16 @@ ENABLE_READER = os.getenv("ENABLE_READER", "1") == "1"
 JINA_API_KEY = os.getenv("JINA_API_KEY", "").strip()
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
-app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-v16")
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-v18")
+
+@app.after_request
+def no_cache(resp):
+    # Eski PWA/service worker ve tarayıcı önbelleği yüzünden eski app.js çalışmasın.
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 # -------------------------------------------------------------
 # Hazır kataloglar
@@ -296,6 +306,16 @@ def db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def ensure_column(conn, table, column, decl):
+    """Eski Render veritabanlarını yeni sürüme taşır.
+    CREATE TABLE IF NOT EXISTS eski tabloya yeni kolon eklemez; bu yüzden
+    önceki sürümlerde POST /api/searches çöküyordu.
+    """
+    cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
 def init_db():
     conn = db(); c = conn.cursor()
     c.executescript("""
@@ -304,24 +324,7 @@ def init_db():
         name TEXT NOT NULL,
         brand TEXT NOT NULL,
         model TEXT NOT NULL,
-        package_name TEXT,
-        city TEXT,
-        year_min INTEGER,
-        year_max INTEGER,
-        price_min INTEGER,
-        price_max INTEGER,
-        km_max INTEGER,
-        fuel TEXT,
-        gear TEXT,
-        sources_json TEXT NOT NULL,
-        email_to TEXT,
-        telegram_chat_id TEXT,
-        check_interval_hours INTEGER DEFAULT 4,
-        baseline_done INTEGER DEFAULT 0,
-        active INTEGER DEFAULT 1,
-        created_at TEXT NOT NULL,
-        last_checked_at TEXT,
-        last_status TEXT
+        created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS items (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -331,31 +334,74 @@ def init_db():
         item_key TEXT NOT NULL,
         title TEXT NOT NULL,
         url TEXT NOT NULL,
-        city TEXT,
-        year INTEGER,
-        km INTEGER,
-        first_price INTEGER,
-        current_price INTEGER,
-        lowest_price INTEGER,
         first_seen_at TEXT NOT NULL,
         last_seen_at TEXT NOT NULL,
-        last_notified_price INTEGER,
         UNIQUE(search_id, source_key, item_key)
     );
     CREATE TABLE IF NOT EXISTS events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         search_id INTEGER NOT NULL,
-        item_id INTEGER,
         event_type TEXT NOT NULL,
         title TEXT NOT NULL,
-        old_price INTEGER,
-        new_price INTEGER,
-        source_name TEXT,
-        url TEXT,
-        created_at TEXT NOT NULL,
-        notification_status TEXT
+        created_at TEXT NOT NULL
     );
     """)
+
+    # searches tablosu eski sürümlerden gelirse eksik kolonları ekle.
+    search_cols = {
+        "package_name": "TEXT DEFAULT 'Farketmez'",
+        "city": "TEXT DEFAULT 'Tüm Türkiye'",
+        "year_min": "INTEGER",
+        "year_max": "INTEGER",
+        "price_min": "INTEGER",
+        "price_max": "INTEGER",
+        "km_max": "INTEGER",
+        "fuel": "TEXT DEFAULT 'Farketmez'",
+        "gear": "TEXT DEFAULT 'Farketmez'",
+        "sources_json": "TEXT DEFAULT '[]'",
+        "email_to": "TEXT",
+        "telegram_chat_id": "TEXT",
+        "check_interval_hours": "INTEGER DEFAULT 4",
+        "baseline_done": "INTEGER DEFAULT 0",
+        "active": "INTEGER DEFAULT 1",
+        "last_checked_at": "TEXT",
+        "last_status": "TEXT"
+    }
+    for col, decl in search_cols.items():
+        ensure_column(conn, "searches", col, decl)
+
+    item_cols = {
+        "city": "TEXT",
+        "year": "INTEGER",
+        "km": "INTEGER",
+        "first_price": "INTEGER",
+        "current_price": "INTEGER",
+        "lowest_price": "INTEGER",
+        "last_notified_price": "INTEGER"
+    }
+    for col, decl in item_cols.items():
+        ensure_column(conn, "items", col, decl)
+
+    event_cols = {
+        "item_id": "INTEGER",
+        "old_price": "INTEGER",
+        "new_price": "INTEGER",
+        "source_name": "TEXT",
+        "url": "TEXT",
+        "notification_status": "TEXT"
+    }
+    for col, decl in event_cols.items():
+        ensure_column(conn, "events", col, decl)
+
+    # Eski kayıtlardaki boş değerleri yeni varsayılanlara çek.
+    c.execute("UPDATE searches SET sources_json='[]' WHERE sources_json IS NULL OR sources_json='' ")
+    c.execute("UPDATE searches SET package_name='Farketmez' WHERE package_name IS NULL OR package_name='' ")
+    c.execute("UPDATE searches SET city='Tüm Türkiye' WHERE city IS NULL OR city='' ")
+    c.execute("UPDATE searches SET fuel='Farketmez' WHERE fuel IS NULL OR fuel='' ")
+    c.execute("UPDATE searches SET gear='Farketmez' WHERE gear IS NULL OR gear='' ")
+    c.execute("UPDATE searches SET check_interval_hours=4 WHERE check_interval_hours IS NULL OR check_interval_hours<1 ")
+    c.execute("UPDATE searches SET active=1 WHERE active IS NULL ")
+    c.execute("UPDATE searches SET baseline_done=0 WHERE baseline_done IS NULL ")
     conn.commit(); conn.close()
 
 def row_to_search(r):
@@ -590,9 +636,32 @@ def scheduler_tick():
             try: run_search(s["id"])
             except Exception: pass
 
+def safe_run_search(search_id):
+    try:
+        return run_search(search_id)
+    except Exception as e:
+        # Takip kaydı asla kaybolmasın. Arama motoru patlarsa durum satırına yaz.
+        try:
+            conn = db()
+            conn.execute("UPDATE searches SET last_checked_at=?, last_status=? WHERE id=?", (now_iso(), f"Arama hatası: {e.__class__.__name__}: {e}", search_id))
+            conn.commit(); conn.close()
+        except Exception:
+            pass
+        return {"ok": False, "error": f"{e.__class__.__name__}: {e}"}
+
+
+def queue_initial_run(search_id):
+    t = threading.Thread(target=safe_run_search, args=(search_id,), daemon=True)
+    t.start()
+
 # -------------------------------------------------------------
 # Routes
 # -------------------------------------------------------------
+@app.route("/reset-cache")
+def reset_cache():
+    # Bu sayfa eski mobil PWA/service worker kaydını temizler ve yeni sürüme yönlendirir.
+    return """<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Önbellek temizleniyor</title><style>body{font-family:system-ui;background:#0b1220;color:#eaf2ff;padding:32px} .box{max-width:620px;margin:auto;background:#151d2b;border:1px solid #2b374a;border-radius:20px;padding:24px}</style></head><body><div class='box'><h1>Araç Avcısı temizleniyor</h1><p>Eski uygulama önbelleği siliniyor. Birkaç saniye içinde yeni sürüm açılacak.</p></div><script>(async()=>{try{if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister()));} if(window.caches){const keys=await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k)));}}catch(e){} location.replace('/?v=18&cache=temiz');})();</script></body></html>"""
+
 @app.route("/")
 def index():
     return render_template("index.html", version=VERSION)
@@ -600,6 +669,18 @@ def index():
 @app.route("/health")
 def health():
     return jsonify({"ok": True, "version": VERSION, "time": now_iso(), "data_dir": DATA_DIR, "reader_enabled": ENABLE_READER})
+
+@app.route("/api/options")
+def api_options_legacy():
+    # Eski mobil PWA önbellekte kalırsa tamamen kırılmasın diye eski isimlerle katalog döndürür.
+    return jsonify({
+        "brands": CAR_CATALOG,
+        "packages": CAR_PACKAGES,
+        "cities": CITIES,
+        "sources": SOURCES,
+        "default_interval_hours": DEFAULT_INTERVAL,
+        "default_packages": ["Farketmez"]
+    })
 
 @app.route("/api/catalog")
 def api_catalog():
@@ -609,21 +690,31 @@ def api_catalog():
 def api_searches():
     conn = db()
     if request.method == "POST":
-        data = request.get_json(force=True)
+        data = request.get_json(force=True) or {}
         sources = data.get("sources") or [s["key"] for s in SOURCES]
         sources = [s for s in sources if s in SOURCE_MAP]
-        name = data.get("name") or f"{data.get('brand')} {data.get('model')}"
-        cur = conn.execute("""INSERT INTO searches(name,brand,model,package_name,city,year_min,year_max,price_min,price_max,km_max,fuel,gear,sources_json,email_to,telegram_chat_id,check_interval_hours,baseline_done,active,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?)""", (name, data.get("brand"), data.get("model"), data.get("package_name") or "Farketmez", data.get("city") or "Tüm Türkiye", as_int(data.get("year_min")), as_int(data.get("year_max")), as_int(data.get("price_min")), as_int(data.get("price_max")), as_int(data.get("km_max")), data.get("fuel") or "Farketmez", data.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), data.get("email_to"), data.get("telegram_chat_id"), max(1, min(int(data.get("check_interval_hours") or DEFAULT_INTERVAL), 168)), now_iso()))
+        if not sources:
+            conn.close(); return jsonify({"ok": False, "error": "En az bir site seçmelisin."}), 400
+        brand = (data.get("brand") or "").strip()
+        model = (data.get("model") or "").strip()
+        if not brand or not model:
+            conn.close(); return jsonify({"ok": False, "error": "Marka ve model seçmelisin."}), 400
+        name = (data.get("name") or f"{brand} {model}").strip()
+        try:
+            interval = max(1, min(int(data.get("check_interval_hours") or DEFAULT_INTERVAL), 168))
+        except Exception:
+            interval = DEFAULT_INTERVAL
+        cur = conn.execute("""INSERT INTO searches(name,brand,model,package_name,city,year_min,year_max,price_min,price_max,km_max,fuel,gear,sources_json,email_to,telegram_chat_id,check_interval_hours,baseline_done,active,created_at,last_status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,?,?)""", (name, brand, model, data.get("package_name") or "Farketmez", data.get("city") or "Tüm Türkiye", as_int(data.get("year_min")), as_int(data.get("year_max")), as_int(data.get("price_min")), as_int(data.get("price_max")), as_int(data.get("km_max")), data.get("fuel") or "Farketmez", data.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), data.get("email_to"), data.get("telegram_chat_id"), interval, now_iso(), "Takip kaydedildi. Başlangıç araması arkada çalışıyor..."))
         conn.commit(); sid = cur.lastrowid; conn.close()
-        res = run_search(sid)  # İlk arama başlangıç listesi.
-        return jsonify({"ok": True, "id": sid, "initial_run": res})
+        queue_initial_run(sid)  # Ağ/siteler yavaşlasa bile takip kaydı kaybolmaz.
+        return jsonify({"ok": True, "id": sid, "queued": True, "message": "Takip kaydedildi. Başlangıç araması arkada çalışıyor."})
     rows = [row_to_search(r) for r in conn.execute("SELECT * FROM searches ORDER BY id DESC").fetchall()]
     conn.close(); return jsonify({"ok": True, "searches": rows})
 
 @app.route("/api/searches/<int:sid>/run", methods=["POST"])
 def api_run(sid):
-    return jsonify(run_search(sid))
+    return jsonify(safe_run_search(sid))
 
 @app.route("/api/searches/<int:sid>/toggle", methods=["POST"])
 def api_toggle(sid):
@@ -652,6 +743,13 @@ def api_items(sid):
         x["price_text"] = money(x.get("current_price")) if x.get("current_price") else ""
         x["km_text"] = f"{int(x['km']):,}".replace(",", ".") + " km" if x.get("km") else ""
     return jsonify({"ok": True, "items": rows})
+
+@app.route("/api/events")
+def api_events():
+    conn = db()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM events ORDER BY id DESC LIMIT 50").fetchall()]
+    conn.close()
+    return jsonify({"ok": True, "events": rows})
 
 @app.route("/api/searches/<int:sid>/links")
 def api_links(sid):
