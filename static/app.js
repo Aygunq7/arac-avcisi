@@ -12,7 +12,7 @@ async function boot(){
   $('#brand').onchange = () => { fillModels(); fillPackages(); };
   $('#model').onchange = fillPackages;
   $('#searchForm').onsubmit = createSearch;
-  if('serviceWorker' in navigator){ /* v18: service worker kapalı, eski cache temizleniyor */ }
+  if('serviceWorker' in navigator){ /* v19: service worker kapalı, eski cache temizleniyor */ }
 }
 function fillCatalog(){
   const city=$('#city'), brand=$('#brand'), sources=$('#sources');

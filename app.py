@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 load_dotenv()
 
-VERSION = "v18-cache-temiz-takip-garantili"
+VERSION = "v19-arabam-liste-ve-tekil-sonuc"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv("DATA_DIR") or os.path.join(APP_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -31,7 +31,7 @@ JINA_API_KEY = os.getenv("JINA_API_KEY", "").strip()
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
-app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-v18")
+app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-v19")
 
 @app.after_request
 def no_cache(resp):
@@ -90,7 +90,7 @@ CITIES += [c for c in ["Adıyaman", "Afyonkarahisar", "Ağrı", "Amasya", "Artvi
 
 SOURCES = [
     {"key":"sahibinden", "name":"Sahibinden", "base":"https://www.sahibinden.com", "can_parse": True, "reader": True},
-    {"key":"arabam", "name":"Arabam", "base":"https://www.arabam.com", "can_parse": True},
+    {"key":"arabam", "name":"Arabam", "base":"https://www.arabam.com", "can_parse": True, "reader": True},
     {"key":"letgo", "name":"Letgo", "base":"https://www.letgo.com", "can_parse": False},
     {"key":"facebook", "name":"Facebook Marketplace", "base":"https://www.facebook.com", "can_parse": False},
     {"key":"vavacars", "name":"VavaCars", "base":"https://tr.vava.cars", "can_parse": True, "reader": True},
@@ -481,13 +481,34 @@ def extract_city_text(text):
 
 def real_listing_url(key, url):
     p = urlparse(url).path.lower()
-    if key == "sahibinden": return "/ilan/" in p
-    if key == "arabam": return "/ilan/" in p
-    if key == "letgo": return "/item/" in p or "/ilan/" in p
-    if key == "otoplus": return ("sahibinden-" in p or p.count("/") >= 4 and re.search(r"\d{5,}", p))
-    if key == "otokoc": return any(x in p for x in ["arac-detay", "detay", "ikinci-el-arac/"])
-    if key == "vavacars": return any(x in p for x in ["/car/", "/detail", "/cars-for-you/"])
+    q = urlparse(url).query.lower()
+    # Sadece gerçek ilan detay linkleri kabul edilir.
+    # Marka/model arama sayfaları veya filtre sayfaları ilan gibi listeye düşmesin.
+    if key == "sahibinden":
+        return "/ilan/" in p
+    if key == "arabam":
+        return "/ilan/" in p
+    if key == "letgo":
+        return "/item/" in p or "/ilan/" in p
+    if key == "otoplus":
+        # Otoplus kategori URL'leri şu tiptedir: /volkswagen/tiguan/...
+        # Bunlar ilan değildir. Sadece açık detay kalıplarını kabul ediyoruz.
+        return any(x in p for x in ["/arac/", "/arac-detay", "/detay/", "/detail/"])
+    if key == "otokoc":
+        return any(x in p for x in ["arac-detay", "/detay/", "ikinci-el-arac/"]) and not p.rstrip("/").startswith("/ikinci-el-")
+    if key == "vavacars":
+        return any(x in p for x in ["/car/", "/detail/", "/arac/"])
+    if key == "arabasepeti":
+        return any(x in p for x in ["/ilan/", "/detay", "/arac/"])
+    if key == "arabalar":
+        return any(x in p for x in ["/ilan/", "/detay", "/arac/"])
     return any(x in p for x in ["/ilan/", "/detay", "/detail", "/arac/"])
+
+def synthetic_url(final_url, source_key, signature):
+    # Arabam gibi bazı liste sayfaları Reader metninde ilan detay linkini vermiyor.
+    # Bu durumda kullanıcıyı doğru filtrelenmiş liste sayfasına götüren tekil bir bağlantı üretiyoruz.
+    h = hashlib.sha1((source_key + "|" + signature).encode("utf-8", errors="ignore")).hexdigest()[:12]
+    return final_url.split("#")[0] + f"#{source_key}-{h}"
 
 def item_from_text(source, title, url, text, search, loose=False):
     title = clean_title(title) or clean_title(text.split("\n")[0] if text else "")
@@ -522,9 +543,97 @@ def parse_html(source, html, search, final_url):
         if len(out) >= 50: break
     # Gerçek ilan linki yoksa metinden sentetik ilan üretmiyoruz.
     # Önceki sürümlerde "Filtrele" gibi sayfa metinleri araç sanılıyordu.
+    return dedupe_items(out)
+
+
+def parse_arabam_reader_text(source, text, search, final_url):
+    """Arabam liste sayfasının Reader çıktısından gerçek araç satırlarını toplar.
+    Arabam sayfası çoğu zaman HTML içinde doğrudan ilan linki vermiyor;
+    fakat liste metninde yıl, km, fiyat ve şehir satırları var.
+    Bu fonksiyon sadece bu alanlar birlikte varsa kayıt üretir.
+    """
+    raw_lines = [re.sub(r"\s+", " ", x).strip() for x in (text or "").splitlines()]
+    lines = [x for x in raw_lines if x and x not in ["#", "##", "###"]]
+    out, seen = [], set()
+    brand_model = tr_norm(f"{search.get('brand')} {search.get('model')}")
+    # Arama başlığı: Volkswagen Tiguan 1.4 TSI Comfortline
+    # Sonrasında ilan başlığı + yıl + km + renk + fiyat + tarih + şehir gelir.
+    for i, line in enumerate(lines):
+        nline = tr_norm(line)
+        if not brand_model or not nline.startswith(brand_model):
+            continue
+        if any(x in nline for x in ["fiyatlari", "fiyatları", "ikinci el", "populer", "sahibinden volkswagen modelleri"]):
+            continue
+        window_lines = lines[i:i+12]
+        window = "\n".join(window_lines)
+        price = parse_price(window)
+        year = parse_year(window)
+        km = parse_km(window)
+        if not (price and year and km is not None):
+            continue
+        # Başlık, marka/model satırından sonraki ilk anlamlı satırdır.
+        title = ""
+        for cand in lines[i+1:i+7]:
+            cn = tr_norm(cand)
+            # Fiyat, saf yıl, saf km, renk/tarih/aksiyon satırları başlık değildir.
+            if parse_price(cand):
+                continue
+            if re.fullmatch(r"(19[8-9]\d|20[0-3]\d)", cand.strip()):
+                continue
+            if re.fullmatch(r"\d{1,3}(?:[\.\s]\d{3})+", cand.strip()):
+                continue
+            if re.search(r"haziran|ocak|şubat|subat|mart|nisan|mayıs|mayis|temmuz|ağustos|agustos|eylül|eylul|ekim|kasım|kasim|aralık|aralik", cn):
+                continue
+            if cn in ["goster", "göster", "karsilastir", "karşılaştır", "beyaz", "siyah", "gri", "kirmizi", "kırmızı", "bej", "mavi", "lacivert", "kahverengi"]:
+                continue
+            if len(cand) >= 8:
+                title = cand
+                break
+        if not title:
+            title = line
+        city = extract_city_text(window)
+        signature = f"{title}|{price}|{year}|{km}|{city or ''}"
+        item = {
+            "source_key": source["key"],
+            "source_name": source["name"],
+            "title": clean_title(title),
+            "url": synthetic_url(final_url, "arabam", signature),
+            "price": price,
+            "year": year,
+            "km": km,
+            "city": city,
+            "raw_text": window[:2500]
+        }
+        if not item["title"]:
+            continue
+        # Reader listesinde bazen şehir eksik olabilir; ancak fiyat/yıl/km varsa ve marka-model-paket uyuyorsa kabul et.
+        if passes_filters(item, search, loose=False):
+            k = hashlib.sha1(signature.encode("utf-8", errors="ignore")).hexdigest()
+            if k not in seen:
+                seen.add(k); out.append(item)
+        if len(out) >= 40:
+            break
+    return out
+
+def dedupe_items(items):
+    out, seen = [], set()
+    for item in items or []:
+        sig = "|".join([
+            tr_norm(item.get("source_key")),
+            tr_norm(item.get("title")),
+            str(as_int(item.get("price")) or ""),
+            str(as_int(item.get("year")) or ""),
+            str(as_int(item.get("km")) or ""),
+            tr_norm(item.get("city") or "")
+        ])
+        if sig in seen:
+            continue
+        seen.add(sig); out.append(item)
     return out
 
 def parse_reader_text(source, text, search, final_url):
+    if source.get("key") == "arabam":
+        return parse_arabam_reader_text(source, text, search, final_url)
     out, seen = [], set()
     key = source["key"]
     # Markdown linkleri önce.
@@ -543,7 +652,7 @@ def parse_reader_text(source, text, search, final_url):
         if len(out) >= 50: break
     # Reader metninden URL olmadan sentetik ilan üretmiyoruz.
     # Gerçek ilan linki yoksa liste boş kalır, sahte kayıt oluşmaz.
-    return out
+    return dedupe_items(out)
 
 def fetch_source(source, search):
     url = build_url(source["key"], search)
@@ -660,7 +769,7 @@ def queue_initial_run(search_id):
 @app.route("/reset-cache")
 def reset_cache():
     # Bu sayfa eski mobil PWA/service worker kaydını temizler ve yeni sürüme yönlendirir.
-    return """<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Önbellek temizleniyor</title><style>body{font-family:system-ui;background:#0b1220;color:#eaf2ff;padding:32px} .box{max-width:620px;margin:auto;background:#151d2b;border:1px solid #2b374a;border-radius:20px;padding:24px}</style></head><body><div class='box'><h1>Araç Avcısı temizleniyor</h1><p>Eski uygulama önbelleği siliniyor. Birkaç saniye içinde yeni sürüm açılacak.</p></div><script>(async()=>{try{if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister()));} if(window.caches){const keys=await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k)));}}catch(e){} location.replace('/?v=18&cache=temiz');})();</script></body></html>"""
+    return """<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Önbellek temizleniyor</title><style>body{font-family:system-ui;background:#0b1220;color:#eaf2ff;padding:32px} .box{max-width:620px;margin:auto;background:#151d2b;border:1px solid #2b374a;border-radius:20px;padding:24px}</style></head><body><div class='box'><h1>Araç Avcısı temizleniyor</h1><p>Eski uygulama önbelleği siliniyor. Birkaç saniye içinde yeni sürüm açılacak.</p></div><script>(async()=>{try{if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister()));} if(window.caches){const keys=await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k)));}}catch(e){} location.replace('/?v=19&cache=temiz');})();</script></body></html>"""
 
 @app.route("/")
 def index():
@@ -764,13 +873,24 @@ _booted = False
 
 
 def cleanup_old_fake_items():
-    bad = ["filtrele", "garantili 2. el", "garantili ikinci el", "araclari listeleniyor", "araçları listeleniyor", "sonuc bulunamadi", "sonuç bulunamadı"]
+    bad = ["filtrele", "garantili 2. el", "garantili ikinci el", "araclari listeleniyor", "araçları listeleniyor", "sonuc bulunamadi", "sonuç bulunamadı", "model yılı", "kilometre", "sıralama"]
     conn = db()
-    rows = conn.execute("SELECT id,title,url FROM items").fetchall()
+    rows = conn.execute("SELECT id,title,url,source_key FROM items").fetchall()
+    seen = set()
     for r in rows:
         t = tr_norm(r["title"] or "")
         u = r["url"] or ""
-        if any(b in t for b in bad) or "#otoplus-" in u or "#reader-" in u:
+        src = r["source_key"] or ""
+        bad_url = False
+        # Otoplus kategori arama linkleri eski sürümlerde ilan gibi kaydedilmişti.
+        if src == "otoplus" and not real_listing_url("otoplus", u):
+            bad_url = True
+        if "#otoplus-" in u or "#reader-" in u:
+            bad_url = True
+        sig = (src, t, u.split("#")[0])
+        duplicate = sig in seen
+        seen.add(sig)
+        if duplicate or any(b in t for b in bad) or bad_url:
             conn.execute("DELETE FROM items WHERE id=?", (r["id"],))
     conn.commit(); conn.close()
 
