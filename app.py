@@ -15,18 +15,18 @@ from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, redirect, jsonify, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 
-VERSION = "v28-filtreler-kesin-uygulaniyor"
+VERSION = "v30-filtreler-gercekten-aktif"
 DATA_DIR = os.getenv("DATA_DIR", "data")
 DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.db")
 DEFAULT_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4") or 4)
 ENABLE_SCHEDULER = os.getenv("ENABLE_SCHEDULER", "1") == "1"
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "18") or 18)
+REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "8") or 8)
 MAX_ITEMS_PER_SOURCE = int(os.getenv("MAX_ITEMS_PER_SOURCE", "12") or 12)
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "arac-avcisi-v25")
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "arac-avcisi-v30")
 
 BRANDS = {
     "Volkswagen": {
@@ -125,7 +125,7 @@ TRACK_COLUMNS = {
 LISTING_COLUMNS = {
     "track_id": "INTEGER", "source": "TEXT", "title": "TEXT", "price": "INTEGER",
     "year": "INTEGER", "km": "INTEGER", "city": "TEXT", "url": "TEXT", "uid": "TEXT",
-    "first_seen": "TEXT", "last_seen": "TEXT"
+    "first_seen": "TEXT", "last_seen": "TEXT", "raw": "TEXT DEFAULT ''"
 }
 EVENT_COLUMNS = {
     "track_id": "INTEGER", "type": "TEXT", "source": "TEXT", "title": "TEXT", "price_old": "INTEGER",
@@ -174,7 +174,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         track_id INTEGER, source TEXT, title TEXT, price INTEGER,
         year INTEGER, km INTEGER, city TEXT, url TEXT, uid TEXT,
-        first_seen TEXT, last_seen TEXT, UNIQUE(track_id, uid)
+        first_seen TEXT, last_seen TEXT, raw TEXT DEFAULT '', UNIQUE(track_id, uid)
     )""")
     cur.execute("""CREATE TABLE IF NOT EXISTS events(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -360,25 +360,43 @@ def bad_title(title):
     return len(t) < 8 or any(b in t for b in bads)
 
 
+def text_for_parsing(text):
+    """URL, script kırıntısı ve form filtresi değerleri sayısal filtreleri kandırmasın."""
+    text = BeautifulSoup(text or "", "html.parser").get_text(" ")
+    text = re.sub(r"https?://\S+", " ", text)
+    text = re.sub(r"(?:price|km|year|a4|a5)[_-]?(?:min|max)?=\d+", " ", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def parse_price(text):
-    matches = re.findall(r"((?:\d{1,3}[\.\s]){1,4}\d{3}|\d{6,9})\s*(?:tl|₺)", text.lower())
+    clean = text_for_parsing(text).lower()
+    # Sadece TL/₺ yanında geçen değerleri fiyat say. 2018, 110000 km gibi sayıları fiyat sanma.
+    matches = re.findall(r"(?<!\d)((?:\d{1,3}(?:[\.\s]\d{3}){1,4})|\d{6,9})\s*(?:tl|₺)", clean)
     if not matches:
         return None
     vals = [as_int(m) for m in matches]
-    vals = [v for v in vals if v and 20000 <= v <= 20000000]
+    vals = [v for v in vals if v and 50000 <= v <= 50000000]
     return vals[0] if vals else None
 
 
 def parse_year(text):
-    years = [int(x) for x in re.findall(r"\b(19[8-9]\d|20[0-3]\d)\b", text)]
+    clean = text_for_parsing(text)
+    # Önce model yılı / yıl çevresindeki değeri yakala.
+    m = re.search(r"(?:model\s*yılı|model\s*yili|yıl|yili|yılı)\D{0,20}(19[8-9]\d|20[0-3]\d)", clean, re.I)
+    if m:
+        return int(m.group(1))
+    years = [int(x) for x in re.findall(r"\b(19[8-9]\d|20[0-3]\d)\b", clean)]
+    # Aynı blokta birden fazla tarih varsa ilk gerçek ilan satırı genelde ilk değeri verir.
     return years[0] if years else None
 
 
 def parse_km(text):
-    m = re.search(r"((?:\d{1,3}[\.\s]){1,3}\d{3}|\d{4,7})\s*km", text.lower())
+    clean = text_for_parsing(text).lower()
+    m = re.search(r"((?:\d{1,3}(?:[\.\s]\d{3}){1,3})|\d{4,7})\s*(?:km|kilometre)", clean)
     if m:
         v = as_int(m.group(1))
-        return v if v and v < 1000000 else None
+        return v if v is not None and 0 <= v < 1000000 else None
     return None
 
 
@@ -423,70 +441,93 @@ def gear_ok(item, t):
     return True
 
 
-def passes_filters(item, t):
-    """Kesin filtre motoru.
-    Önceki sürümlerde fiyat/yıl/km okunamazsa ilan yine listeye giriyordu. Bu yüzden kullanıcı
-    filtre çalışmıyor gibi görüyordu. Bu sürümde kullanıcı bir filtre girdiyse o bilgi ilanda
-    okunmak zorunda. Okunamayan ilan listeye alınmaz.
+def filter_reason(item, t):
+    """İlanın takip filtresine uyup uymadığını nedenleriyle döndürür.
+    Kullanıcı bir filtre girdiyse o bilgi okunmak zorunda. Okunamayan ilan listeye girmez.
     """
     blob = f"{item.get('title','')} {item.get('url','')} {item.get('raw','')}".lower()
     slug_blob = slug_tr(blob)
     brand_slug = slug_tr(t.get("brand"))
     model_slug = slug_tr(t.get("model"))
     if brand_slug and brand_slug not in slug_blob:
-        return False
+        return False, "marka eşleşmedi"
     if model_slug and model_slug not in slug_blob:
-        return False
+        return False, "model eşleşmedi"
 
     trim = t.get("trim") or ""
     if trim and trim != "Farketmez":
         tokens = [slug_tr(x) for x in re.split(r"\s+", trim) if len(x) > 1]
-        # Motor hacmi ve paket adı da metinde/url'de görünmeli. Örn: 1.4 + tsi + comfortline.
-        required = []
-        for x in tokens:
-            if x in ["bmt", "eco", "i", "ve", "and"]:
-                continue
-            required.append(x)
-        # TSI/TDI gibi kısa motor kodlarını da kontrol et ama ilan başlığında yoksa tamamen elenmesin diye
-        # en az paket adı + model şartını güçlü tutuyoruz.
-        important = [x for x in required if not re.match(r"^\d", x)]
-        if important and not all(x in slug_blob for x in important):
-            return False
+        # Paket/motor için en az paket adı veya motor kodu görünmeli.
+        important = [x for x in tokens if x not in ["bmt", "eco", "i", "ve", "and"]]
+        if important:
+            missing = [x for x in important if x not in slug_blob]
+            # 1.4 / 1.5 gibi motor hacmini bazen URL 14 diye taşır; hepsi eksikse reddet.
+            if len(missing) == len(important):
+                return False, "paket/motor eşleşmedi"
 
     if not gear_ok(item, t):
-        return False
+        return False, "vites uymadı veya okunamadı"
     if not fuel_ok(item, t):
-        return False
+        return False, "yakıt uymadı veya okunamadı"
 
     price = item.get("price")
     if t.get("price_min") or t.get("price_max"):
-        if not price:
-            return False
-        if t.get("price_min") and price < t["price_min"]: return False
-        if t.get("price_max") and price > t["price_max"]: return False
+        if price is None:
+            return False, "fiyat okunamadı"
+        if t.get("price_min") and price < t["price_min"]:
+            return False, "fiyat düşük"
+        if t.get("price_max") and price > t["price_max"]:
+            return False, "fiyat yüksek"
 
     year = item.get("year")
     if t.get("year_min") or t.get("year_max"):
-        if not year:
-            return False
-        if t.get("year_min") and year < t["year_min"]: return False
-        if t.get("year_max") and year > t["year_max"]: return False
+        if year is None:
+            return False, "yıl okunamadı"
+        if t.get("year_min") and year < t["year_min"]:
+            return False, "yıl düşük"
+        if t.get("year_max") and year > t["year_max"]:
+            return False, "yıl yüksek"
 
     km = item.get("km")
     if t.get("km_max"):
-        if not km:
-            return False
+        if km is None:
+            return False, "km okunamadı"
         if km > t["km_max"]:
-            return False
+            return False, "km yüksek"
 
     city = t.get("city")
     if city and city != "Tüm Türkiye":
-        # Şehir filtresi seçildiyse ilan içinden şehir okunmak zorunda.
         if not item.get("city"):
-            return False
+            return False, "şehir okunamadı"
         if slug_tr(city) not in slug_tr(item.get("city")):
-            return False
-    return True
+            return False, "şehir uymadı"
+    return True, "uygun"
+
+
+def passes_filters(item, t):
+    return filter_reason(item, t)[0]
+
+
+def listing_row_passes(row, t):
+    item = dict(row)
+    item.setdefault("raw", "")
+    return passes_filters(item, t)
+
+
+def cleanup_invalid_listings(con, t):
+    """Eski sürümlerden kalan filtre dışı ilanları temizler."""
+    try:
+        rows = con.execute("SELECT * FROM listings WHERE track_id=?", (t["id"],)).fetchall()
+        bad_ids = []
+        for r in rows:
+            if not listing_row_passes(r, t):
+                bad_ids.append(r["id"])
+        if bad_ids:
+            con.executemany("DELETE FROM listings WHERE id=?", [(x,) for x in bad_ids])
+            con.commit()
+        return len(bad_ids)
+    except Exception:
+        return 0
 
 def fetch(url):
     headers = {
@@ -608,6 +649,7 @@ def extract_city(text):
 def source_check(source, t):
     status = []
     items = []
+    rejected = {}
     url = list_url(source, t)
 
     if source in OPEN_ONLY_SOURCES:
@@ -658,19 +700,26 @@ def source_check(source, t):
     for it in items:
         it["url"] = normalize_url(it.get("url"))
         if not is_detail_url(source, it.get("url")):
+            rejected["gerçek ilan linki değil"] = rejected.get("gerçek ilan linki değil", 0) + 1
             continue
         if bad_title(it.get("title")):
+            rejected["başlık geçersiz"] = rejected.get("başlık geçersiz", 0) + 1
             continue
-        if not passes_filters(it, t):
+        ok, reason = filter_reason(it, t)
+        if not ok:
+            rejected[reason] = rejected.get(reason, 0) + 1
             continue
         uid = make_uid(it)
         if uid in seen:
+            rejected["tekrar"] = rejected.get("tekrar", 0) + 1
             continue
         it["uid"] = uid
         seen.add(uid)
         out.append(it)
         if len(out) >= MAX_ITEMS_PER_SOURCE:
             break
+    if rejected:
+        status.append("elenen " + ", ".join(f"{k}:{v}" for k,v in sorted(rejected.items())))
     return out, " / ".join(status), url
 
 def make_uid(item):
@@ -693,20 +742,27 @@ def check_track(track_id, notify=True):
     if not row:
         con.close(); return
     t = row_to_track(row)
+    cleaned_before = cleanup_invalid_listings(con, t)
     statuses = []
+    if cleaned_before:
+        statuses.append(f"eski filtre dışı ilan temizlendi:{cleaned_before}")
     total_seen = 0
     new_count = 0
     drop_count = 0
     for source in t["sources"]:
-        found, st, _ = source_check(source, t)
+        try:
+            found, st, _ = source_check(source, t)
+        except Exception as e:
+            found = []
+            st = f"kaynak hatası: {type(e).__name__}: {str(e)[:160]}"
         statuses.append(f"{source}: {st} / liste {len(found)}")
         total_seen += len(found)
         for item in found:
             item["uid"] = item.get("uid") or make_uid(item)
             old = con.execute("SELECT * FROM listings WHERE track_id=? AND uid=?", (track_id, item["uid"])).fetchone()
             if not old:
-                con.execute("""INSERT OR IGNORE INTO listings(track_id, source, title, price, year, km, city, url, uid, first_seen, last_seen)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (track_id, source, item.get("title"), item.get("price"), item.get("year"), item.get("km"), item.get("city"), item.get("url"), item["uid"], now_iso(), now_iso()))
+                con.execute("""INSERT OR IGNORE INTO listings(track_id, source, title, price, year, km, city, url, uid, first_seen, last_seen, raw)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (track_id, source, item.get("title"), item.get("price"), item.get("year"), item.get("km"), item.get("city"), item.get("url"), item["uid"], now_iso(), now_iso(), item.get("raw", "")))
                 con.execute("INSERT INTO events(track_id,type,source,title,price_new,url,created_at) VALUES(?,?,?,?,?,?,?)", (track_id,"new",source,item.get("title"),item.get("price"),item.get("url"),now_iso()))
                 new_count += 1
                 if notify:
@@ -715,13 +771,14 @@ def check_track(track_id, notify=True):
                 old_price = old["price"]
                 new_price = item.get("price")
                 if old_price and new_price and new_price < old_price:
-                    con.execute("UPDATE listings SET price=?, year=?, km=?, city=?, title=?, url=?, last_seen=? WHERE id=?", (new_price,item.get("year"),item.get("km"),item.get("city"),item.get("title"),item.get("url"),now_iso(),old["id"]))
+                    con.execute("UPDATE listings SET price=?, year=?, km=?, city=?, title=?, url=?, raw=?, last_seen=? WHERE id=?", (new_price,item.get("year"),item.get("km"),item.get("city"),item.get("title"),item.get("url"),item.get("raw", ""),now_iso(),old["id"]))
                     con.execute("INSERT INTO events(track_id,type,source,title,price_old,price_new,url,created_at) VALUES(?,?,?,?,?,?,?,?)", (track_id,"price_drop",source,item.get("title"),old_price,new_price,item.get("url"),now_iso()))
                     drop_count += 1
                     if notify:
                         send_notification(t, "Fiyat düştü", item, old_price, new_price)
                 else:
                     con.execute("UPDATE listings SET last_seen=? WHERE id=?", (now_iso(), old["id"]))
+    cleanup_invalid_listings(con, t)
     count = con.execute("SELECT COUNT(*) c FROM listings WHERE track_id=?", (track_id,)).fetchone()["c"]
     con.execute("UPDATE tracks SET last_check_at=?, last_status=?, item_count=?, updated_at=? WHERE id=?", (now_iso(), f"Kontrol tamamlandı. Görülen: {total_seen}, yeni: {new_count}, fiyat düşen: {drop_count} | " + " ; ".join(statuses), count, now_iso(), track_id))
     con.commit(); con.close()
@@ -780,7 +837,9 @@ def index():
     tracks = [row_to_track(r) for r in con.execute("SELECT * FROM tracks ORDER BY id DESC").fetchall()]
     listings = {}
     for t in tracks:
-        listings[t["id"]] = [dict(x) for x in con.execute("SELECT * FROM listings WHERE track_id=? ORDER BY first_seen DESC LIMIT 80", (t["id"],)).fetchall()]
+        cleanup_invalid_listings(con, t)
+        rows = con.execute("SELECT * FROM listings WHERE track_id=? ORDER BY first_seen DESC LIMIT 80", (t["id"],)).fetchall()
+        listings[t["id"]] = [dict(x) for x in rows if listing_row_passes(x, t)]
     events = [dict(x) for x in con.execute("SELECT * FROM events ORDER BY id DESC LIMIT 50").fetchall()]
     con.close()
     all_models = sorted(set(m for b in BRANDS.values() for m in b["models"]))
@@ -847,8 +906,16 @@ def open_url(track_id, source):
 
 @app.route("/check/<int:track_id>", methods=["POST", "GET"])
 def check(track_id):
-    check_track(track_id, notify=True)
-    return redirect(url_for("index"))
+    # Beyaz 500 ekranını bitirmek için kontrolü web isteği içinde değil, arka planda başlatıyoruz.
+    # Kaynaklardan biri patlarsa takip kartındaki durum alanına yazılır, sayfa çökmez.
+    try:
+        con = db()
+        con.execute("UPDATE tracks SET last_status=?, updated_at=? WHERE id=?", ("Kontrol başlatıldı. 30-90 saniye sonra Yenile'ye bas.", now_iso(), track_id))
+        con.commit(); con.close()
+    except Exception:
+        pass
+    background_check(track_id)
+    return redirect(url_for("index", v="29", checking=track_id))
 
 
 @app.route("/delete/<int:track_id>", methods=["POST"])
@@ -882,8 +949,8 @@ def health():
 def reset_cache():
     return """<!doctype html><meta charset='utf-8'><script>
     if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister()))}
-    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=27&t='+Date.now());
-    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=27'>Aç</a>"""
+    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=30&t='+Date.now());
+    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=30'>Aç</a>"""
 
 
 @app.route("/reset-db")
