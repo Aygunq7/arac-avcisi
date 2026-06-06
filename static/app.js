@@ -1,82 +1,87 @@
-let catalog = null;
 const $ = (q, el=document) => el.querySelector(q);
 const $$ = (q, el=document) => [...el.querySelectorAll(q)];
-function opt(v,t=v){ const o=document.createElement('option'); o.value=v; o.textContent=t; return o; }
-function badge(t, ok=false){ const s=document.createElement('span'); s.className='badge'+(ok?' ok':''); s.textContent=t; return s; }
-async function api(url, opts={}){ const r=await fetch(url,{cache:'no-store',headers:{'Content-Type':'application/json'},...opts}); const j=await r.json().catch(()=>({ok:false,error:'Sunucudan okunamayan cevap geldi'})); if(!r.ok) throw new Error(j.error||'İşlem başarısız'); return j; }
-async function boot(){
-  catalog = await api('/api/catalog');
-  fillCatalog();
-  await loadSearches();
-  $('#refresh').onclick = loadSearches;
-  $('#brand').onchange = () => { fillModels(); fillPackages(); };
-  $('#model').onchange = fillPackages;
-  $('#searchForm').onsubmit = createSearch;
-  if('serviceWorker' in navigator){ /* v20: service worker kapalı, eski cache temizleniyor */ }
+let OPTIONS = null;
+let expanded = new Set();
+
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.style.display='block'; clearTimeout(window.__toast); window.__toast=setTimeout(()=>t.style.display='none',3200); }
+function fmtTL(n){ if(!n) return 'Fiyat yok'; return Number(n).toLocaleString('tr-TR')+' TL'; }
+function fmt(n){ if(n===null||n===undefined||n==='') return '-'; return Number(n).toLocaleString('tr-TR'); }
+function esc(s){ return String(s??'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c])); }
+function opt(sel, arr){ sel.innerHTML=''; arr.forEach(v=>{ const o=document.createElement('option'); o.value=v; o.textContent=v; sel.appendChild(o); }); }
+
+async function api(url, opts={}){ const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opts}); const j=await r.json().catch(()=>({ok:false,error:'JSON okunamadı'})); if(!r.ok || j.ok===false){ throw new Error(j.error || ('HTTP '+r.status)); } return j; }
+async function loadOptions(){ OPTIONS=await api('/api/options'); opt($('#city'), OPTIONS.cities); opt($('#brand'), Object.keys(OPTIONS.brands)); opt($('#fuel'), OPTIONS.fuels); opt($('#transmission'), OPTIONS.transmissions); opt($('#interval_hours'), OPTIONS.intervals.map(x=>`${x}`)); $('#interval_hours').value='4'; renderSources(); updateModels(); }
+function renderSources(){ const box=$('#sources'); box.innerHTML=''; OPTIONS.sources.forEach(s=>{ const label=document.createElement('label'); label.className='source-chip'; label.innerHTML=`<input type="checkbox" value="${esc(s.key)}" checked> ${esc(s.name)}`; box.appendChild(label); }); }
+function updateModels(){ const b=$('#brand').value; const models=Object.keys(OPTIONS.brands[b]||{}); opt($('#model'), models); updatePackages(); }
+function updatePackages(){ const b=$('#brand').value, m=$('#model').value; opt($('#package'), (OPTIONS.brands[b]&&OPTIONS.brands[b][m]) || ['Farketmez']); }
+
+function formData(){
+  return {
+    name: $('#name').value.trim(), city: $('#city').value, brand: $('#brand').value, model: $('#model').value, package: $('#package').value,
+    min_year: $('#min_year').value, max_year: $('#max_year').value, max_km: $('#max_km').value, min_price: $('#min_price').value, max_price: $('#max_price').value,
+    fuel: $('#fuel').value, transmission: $('#transmission').value, interval_hours: Number($('#interval_hours').value || 4), email: $('#email').value.trim(), telegram_chat_id: $('#telegram_chat_id').value.trim(),
+    sources: $$('#sources input:checked').map(x=>x.value)
+  };
 }
-function fillCatalog(){
-  const city=$('#city'), brand=$('#brand'), sources=$('#sources');
-  city.innerHTML=''; catalog.cities.forEach(c=>city.append(opt(c)));
-  brand.innerHTML=''; Object.keys(catalog.brands).sort().forEach(b=>brand.append(opt(b)));
-  sources.innerHTML=''; catalog.sources.forEach(s=>{ const l=document.createElement('label'); l.className='chip'; l.innerHTML=`<input type="checkbox" value="${s.key}" checked> ${s.name}`; sources.append(l); });
-  fillModels(); fillPackages();
-}
-function fillModels(){
-  const b=$('#brand').value, m=$('#model'); m.innerHTML=''; (catalog.brands[b]||[]).forEach(x=>m.append(opt(x)));
-}
-function fillPackages(){
-  const b=$('#brand').value, m=$('#model').value, p=$('#package'); p.innerHTML=''; const list=((catalog.packages[b]||{})[m])||['Farketmez']; list.forEach(x=>p.append(opt(x)));
-}
-async function createSearch(e){
+
+async function createWatch(e){
   e.preventDefault();
-  const f=new FormData(e.target);
-  const data=Object.fromEntries(f.entries());
-  data.sources=$$('#sources input:checked').map(x=>x.value);
-  const btn=$('#searchForm button[type=submit]');
-  btn.disabled=true;
-  $('#formMsg').textContent='Takip kaydediliyor...';
-  try{
-    const res=await api('/api/searches',{method:'POST',body:JSON.stringify(data)});
-    if(!res.ok) throw new Error(res.error || 'Takip kaydedilemedi');
-    $('#formMsg').textContent='Takip kaydedildi. Başlangıç araması arkada çalışıyor.';
-    e.target.reset(); fillCatalog();
-    // Kayıt başarılıysa, liste yükleme hatası artık “işlem başarısız” diye gösterilmez.
-    loadSearches().catch(err=>{ $('#formMsg').textContent='Takip kaydedildi ama liste yenilenemedi. Sayfayı yenile.'; });
-    setTimeout(()=>loadSearches().catch(()=>{}), 2500);
-    setTimeout(()=>loadSearches().catch(()=>{}), 9000);
-  }
-  catch(err){ $('#formMsg').textContent=err.message||'Takip kaydedilemedi'; }
-  finally{ btn.disabled=false; }
+  const btn=$('#submitBtn'); btn.disabled=true; btn.textContent='Takip kaydediliyor...';
+  try{ const j=await api('/api/watches',{method:'POST',body:JSON.stringify(formData())}); toast(j.message || 'Takip kaydedildi'); expanded.add(j.id); await loadWatches(); }
+  catch(err){ toast('İşlem başarısız: '+err.message); }
+  finally{ btn.disabled=false; btn.textContent='Takibi başlat'; }
 }
-async function loadSearches(){
-  const box=$('#searches'); box.innerHTML='<div class="empty">Yükleniyor...</div>';
-  const j=await api('/api/searches'); box.innerHTML='';
-  if(!j.searches.length){ box.innerHTML='<div class="empty">Henüz takip yok.</div>'; return; }
-  j.searches.forEach(renderSearch);
+
+async function loadWatches(){
+  const j=await api('/api/watches');
+  const list=$('#watchList');
+  if(!j.watches.length){ list.innerHTML='<div class="empty"><b>Henüz takip yok.</b><br>Yukarıdan araç ve siteleri seçip ilk takibi başlat.</div>'; }
+  else list.innerHTML=j.watches.map(renderWatch).join('');
+  const ev=$('#events');
+  ev.innerHTML = j.events.length ? j.events.map(x=>`<div class="event"><b>${esc(x.event_type)}</b> ${esc(x.title||'')}<br><span class="small">${esc(x.source||'')} • ${esc(x.created_at||'')}</span></div>`).join('') : '<div class="empty">Henüz bildirim yok. Yeni ilan veya fiyat düşüşü olunca burada görünür.</div>';
+  for(const id of expanded){ const div=$(`#items-${id}`); if(div) await loadItems(id); }
 }
-function renderSearch(s){
-  const tpl=$('#searchTpl').content.cloneNode(true); const card=$('.search-card',tpl);
-  $('h3',card).textContent=s.name||`${s.brand} ${s.model}`;
-  const badges=$('.badges',card); badges.append(badge(`${s.brand} ${s.model}`)); badges.append(badge(s.package_name||'Farketmez')); badges.append(badge(s.city||'Tüm Türkiye')); badges.append(badge(s.active?'Aktif':'Pasif', !!s.active)); badges.append(badge(`${s.interval_hours||4} saatte bir`));
-  $('.sources',card).textContent='Kaynaklar: '+(s.sources||[]).join(', ');
-  $('.date',card).textContent='Son kontrol: '+(s.last_checked_at||'henüz yok');
-  $('.status',card).textContent=s.last_status||'İlk arama bekleniyor';
-  const links=$('.linkBtns',card);
-  Object.entries(s.open_urls||{}).forEach(([k,u])=>{ const src=(catalog.sources||[]).find(x=>x.key===k); const a=document.createElement('a'); a.href=u; a.target='_blank'; a.rel='noopener'; a.textContent=(src?src.name:k)+"'de aç"; links.append(a); });
-  $('.run',card).onclick=async()=>{ $('.status',card).textContent='Kontrol ediliyor...'; try{ const r=await api(`/api/searches/${s.id}/run`,{method:'POST',body:'{}'}); $('.status',card).textContent=r.status||r.error||'Kontrol tamamlandı'; await loadItems(s.id, $('.items',card)); }catch(err){ $('.status',card).textContent=err.message||'Kontrol başarısız'; } await loadSearches(); };
-  $('.toggle',card).onclick=async()=>{ await api(`/api/searches/${s.id}/toggle`,{method:'POST',body:'{}'}); await loadSearches(); };
-  $('.delete',card).onclick=async()=>{ if(confirm('Bu takibi ve kayıtlı ilanları silmek istiyor musun?')){ await api(`/api/searches/${s.id}`,{method:'DELETE'}); await loadSearches(); } };
-  $('.show',card).onclick=()=>loadItems(s.id, $('.items',card));
-  $('.interval',card).value=String(s.interval_hours||4);
-  $('.saveInterval',card).onclick=async()=>{ await api(`/api/searches/${s.id}/interval`,{method:'POST',body:JSON.stringify({check_interval_hours:$('.interval',card).value})}); await loadSearches(); };
-  $('#searches').append(tpl);
-  countItems(s.id, $('.count',card));
+
+function srcName(k){ const s=(OPTIONS?.sources||[]).find(x=>x.key===k); return s?s.name:k; }
+function renderWatch(w){
+  const sources=(w.sources||[]);
+  const status=w.checking? 'Kontrol çalışıyor...' : (w.last_status||'Henüz kontrol yok');
+  return `<div class="watch-card" id="watch-${w.id}">
+    <h3>${esc(w.name || (w.brand+' '+w.model))}</h3>
+    <div class="chips"><span class="chip">${esc(w.brand)} ${esc(w.model)}</span><span class="chip">${esc(w.package||'Farketmez')}</span><span class="chip">${esc(w.city||'Tüm Türkiye')}</span><span class="chip good">${w.active?'Aktif':'Pasif'}</span><span class="chip">${w.interval_hours} saatte bir</span></div>
+    <div class="watch-meta">
+      <div>Kaynaklar: ${sources.map(srcName).map(esc).join(', ')}</div>
+      <div>Bulunan ilan: ${w.items_count || w.last_seen_count || 0}</div>
+      <div>Son kontrol: ${esc(w.last_checked_at || 'henüz yok')}</div>
+      <div>${esc(status)}</div>
+    </div>
+    <div class="watch-actions">
+      ${sources.map(s=>`<a class="open-btn" href="/api/watches/${w.id}/open/${s}" target="_blank">${esc(srcName(s))}'de aç</a>`).join('')}
+    </div>
+    <div class="watch-actions">
+      <button class="secondary" onclick="checkNow(${w.id})">Şimdi kontrol et</button>
+      <button class="secondary" onclick="toggleWatch(${w.id})">Aktif/Pasif</button>
+      <button class="secondary" onclick="toggleItems(${w.id})">Listeyi göster</button>
+      <button class="danger" onclick="deleteWatch(${w.id})">Takibi sil</button>
+    </div>
+    <div class="watch-actions"><select id="int-${w.id}">${OPTIONS.intervals.map(x=>`<option value="${x}" ${x==w.interval_hours?'selected':''}>${x} saatte bir</option>`).join('')}</select><button class="secondary" onclick="saveInterval(${w.id})">Süreyi kaydet</button></div>
+    <div class="items" id="items-${w.id}" style="display:${expanded.has(w.id)?'block':'none'}"></div>
+  </div>`;
 }
-async function countItems(id, el){ const j=await api(`/api/searches/${id}/items`); const by={}; j.items.forEach(i=>by[i.source_name]=(by[i.source_name]||0)+1); el.textContent='Bulunan ilan: '+j.items.length+(j.items.length?' | '+Object.entries(by).map(([k,v])=>`${k}: ${v}`).join(', '):''); }
-async function loadItems(id, box){
-  box.innerHTML='<div class="empty">Liste yükleniyor...</div>'; const j=await api(`/api/searches/${id}/items`); box.innerHTML='';
-  if(!j.items.length){ box.innerHTML='<div class="empty">Henüz ilan yakalanmadı. Engel koyan sitelerde “sitede aç” butonunu kullan. Uygulama sahte ilan üretmez.</div>'; return; }
-  j.items.forEach(i=>{ const d=document.createElement('div'); d.className='item'; d.innerHTML=`<div class="itemTop"><h3>${esc(i.title)}</h3><span class="price">${esc(i.price_text||'Fiyat yok')}</span></div><div class="meta"><span>${esc(i.source_name)}</span>${i.year?`<span>${i.year}</span>`:''}${i.km_text?`<span>${esc(i.km_text)}</span>`:''}${i.city?`<span>${esc(i.city)}</span>`:''}</div><div class="urlBox"><input readonly value="${esc(i.url)}"><button>Kopyala</button><a class="linkBtns" href="${esc(i.url)}" target="_blank" rel="noopener"><button>İlana git</button></a></div>`; $('button',d).onclick=()=>navigator.clipboard.writeText(i.url); box.append(d); });
+async function checkNow(id){ toast('Kontrol başlatıldı'); await api(`/api/watches/${id}/check`,{method:'POST',body:'{}'}); setTimeout(loadWatches,2500); }
+async function toggleWatch(id){ await api(`/api/watches/${id}/toggle`,{method:'POST',body:'{}'}); await loadWatches(); }
+async function deleteWatch(id){ if(!confirm('Takip silinsin mi?')) return; await api(`/api/watches/${id}`,{method:'DELETE'}); expanded.delete(id); await loadWatches(); }
+async function saveInterval(id){ const h=$(`#int-${id}`).value; await api(`/api/watches/${id}/interval`,{method:'POST',body:JSON.stringify({interval_hours:h})}); toast('Süre kaydedildi'); await loadWatches(); }
+async function toggleItems(id){ const div=$(`#items-${id}`); if(!div) return; if(div.style.display==='none'){ expanded.add(id); div.style.display='block'; await loadItems(id); } else { expanded.delete(id); div.style.display='none'; }}
+async function loadItems(id){
+  const div=$(`#items-${id}`); if(!div) return; div.innerHTML='<div class="empty">Liste yükleniyor...</div>';
+  try{ const j=await api(`/api/watches/${id}/items`); if(!j.items.length){ div.innerHTML='<div class="empty">Henüz ilan yakalanmadı. Engel koyan sitelerde “sitede aç” butonunu kullan. Uygulama sahte ilan üretmez.</div>'; return; }
+    div.innerHTML=j.items.map(renderItem).join('');
+  }catch(e){ div.innerHTML='<div class="empty">Liste alınamadı: '+esc(e.message)+'</div>'; }
 }
-function esc(x){ return String(x??'').replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
-boot().catch(e=>{ document.body.insertAdjacentHTML('afterbegin',`<div class="card">Uygulama yüklenemedi: ${esc(e.message)}</div>`); });
+function renderItem(it){ const meta=[srcName(it.source), it.year, it.km?fmt(it.km)+' km':null, it.city].filter(Boolean).join(' • '); return `<div class="item"><div class="item-head"><div><b>${esc(it.title)}</b><br><span class="small">${esc(meta)}</span></div><div class="price">${esc(fmtTL(it.price))}</div></div><div class="small">İlk görüldü: ${esc(it.first_seen_at||'-')} • Son görüldü: ${esc(it.last_seen_at||'-')}</div><div class="urlbox"><input readonly value="${esc(it.url)}"><button class="secondary" onclick="navigator.clipboard.writeText('${esc(it.url)}'); toast('Link kopyalandı')">Kopyala</button><a class="open-btn" target="_blank" href="${esc(it.url)}">İlana git</a></div></div>`; }
+
+window.addEventListener('load', async()=>{
+  try{ await loadOptions(); $('#brand').addEventListener('change', updateModels); $('#model').addEventListener('change', updatePackages); $('#watchForm').addEventListener('submit', createWatch); $('#refreshBtn').addEventListener('click', loadWatches); await loadWatches(); setInterval(loadWatches,60000); }
+  catch(e){ toast('Açılış hatası: '+e.message); }
+});

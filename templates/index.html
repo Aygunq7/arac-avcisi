@@ -2,107 +2,111 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1220">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#07111f">
   <title>Araç Avcısı</title>
-  <link rel="manifest" href="/static/manifest.json?v=20">
-  <link rel="stylesheet" href="/static/app.css?v=20">
+  <link rel="stylesheet" href="/static/app.css?v=21">
 </head>
 <body>
-  <header class="hero">
-    <div>
-      <div class="eyebrow">MOBİL İKİNCİ EL ARAÇ TAKİP PANELİ</div>
-      <h1>Araç Avcısı</h1>
-      <p>Marka, model, paket, şehir ve fiyat/km filtrelerini seç. Uygulama ilanları kaydeder, yeni ilan ve fiyat düşüşünü bildirir.</p>
-    </div>
-    <span class="version">{{ version }} aktif</span>
-  </header>
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Mobil ikinci el araç takip paneli</div>
+        <h1>Araç Avcısı</h1>
+        <p class="sub">Sıfırdan yazılmış stabil sürüm. Önce takibi kaydeder, sonra aramayı arkada çalıştırır. Sahte ilan üretmez; sadece gerçekten yakaladığı ilanları listeler.</p>
+      </div>
+      <div class="badge">{{ version }} aktif</div>
+    </section>
 
-  <main>
-    <section class="card">
+    <section class="card form-card">
       <h2>Yeni takip oluştur</h2>
-      <form id="searchForm">
+      <form id="watchForm">
         <div class="grid two">
-          <label>Arama adı <input name="name" placeholder="Örn: Tiguan Comfortline"></label>
-          <label>Şehir <select name="city" id="city"></select></label>
+          <label>Arama adı
+            <input id="name" name="name" placeholder="Örn: Tiguan Comfortline" autocomplete="off">
+          </label>
+          <label>Şehir
+            <select id="city" name="city"></select>
+          </label>
         </div>
+
         <div class="grid three">
-          <label>Marka <select name="brand" id="brand"></select></label>
-          <label>Model <select name="model" id="model"></select></label>
-          <label>Paket / Motor <select name="package_name" id="package"></select></label>
+          <label>Marka
+            <select id="brand" name="brand"></select>
+          </label>
+          <label>Model
+            <select id="model" name="model"></select>
+          </label>
+          <label>Paket / Motor
+            <select id="package" name="package"></select>
+          </label>
         </div>
+
         <div class="grid three">
-          <label>En düşük yıl <input type="number" name="year_min" placeholder="2016"></label>
-          <label>En yüksek yıl <input type="number" name="year_max" placeholder="2026"></label>
-          <label>Max km <input type="number" name="km_max" placeholder="110000"></label>
+          <label>En düşük yıl
+            <input id="min_year" name="min_year" type="number" inputmode="numeric" placeholder="2016">
+          </label>
+          <label>En yüksek yıl
+            <input id="max_year" name="max_year" type="number" inputmode="numeric" placeholder="2026">
+          </label>
+          <label>Max km
+            <input id="max_km" name="max_km" type="number" inputmode="numeric" placeholder="110000">
+          </label>
         </div>
+
         <div class="grid two">
-          <label>Min fiyat <input type="number" name="price_min" placeholder="1000000"></label>
-          <label>Max fiyat <input type="number" name="price_max" placeholder="1750000"></label>
+          <label>Min fiyat
+            <input id="min_price" name="min_price" type="number" inputmode="numeric" placeholder="1000000">
+          </label>
+          <label>Max fiyat
+            <input id="max_price" name="max_price" type="number" inputmode="numeric" placeholder="1750000">
+          </label>
         </div>
-        <div class="grid three">
+
+        <div class="grid two">
           <label>Yakıt
-            <select name="fuel"><option>Farketmez</option><option>Benzin</option><option>Dizel</option><option>Benzin LPG</option><option>Hibrit</option><option>Elektrikli</option></select>
+            <select id="fuel" name="fuel"></select>
           </label>
           <label>Vites
-            <select name="gear"><option>Farketmez</option><option>Otomatik</option><option>Manuel</option></select>
-          </label>
-          <label>Kontrol sıklığı
-            <select name="check_interval_hours">
-              <option value="1">1 saatte bir</option><option value="2">2 saatte bir</option><option value="3">3 saatte bir</option><option value="4" selected>4 saatte bir</option><option value="6">6 saatte bir</option><option value="8">8 saatte bir</option><option value="12">12 saatte bir</option><option value="24">24 saatte bir</option><option value="48">48 saatte bir</option><option value="72">72 saatte bir</option>
-            </select>
+            <select id="transmission" name="transmission"></select>
           </label>
         </div>
-        <div class="grid two"><label>E-posta bildirimi <input name="email_to" placeholder="mail adresin"></label><label>Telegram Chat ID <input name="telegram_chat_id" placeholder="Boş kalırsa Render ayarı kullanılır"></label></div>
-        <div>
-          <h3>Siteleri seç</h3>
-          <div id="sources" class="chips"></div>
+
+        <h3>Siteleri seç</h3>
+        <div id="sources" class="source-box"></div>
+
+        <div class="grid two">
+          <label>Kaç saatte bir kontrol edilsin?
+            <select id="interval_hours" name="interval_hours"></select>
+          </label>
+          <label>Mail adresi
+            <input id="email" name="email" type="email" placeholder="ornek@mail.com" autocomplete="email">
+          </label>
         </div>
-        <div class="actions"><button type="submit">Takibi oluştur ve ilk aramayı yap</button><span id="formMsg"></span></div>
+        <label>Telegram Chat ID
+          <input id="telegram_chat_id" name="telegram_chat_id" placeholder="Boş kalırsa Render .env kullanılır">
+        </label>
+
+        <button class="primary" type="submit" id="submitBtn">Takibi başlat</button>
+        <p class="hint">İlk aramada bulunan ilanlar başlangıç listesi olur. Bundan sonra yeni ilan ve fiyat düşüşü olursa bildirim üretilir.</p>
       </form>
     </section>
 
     <section class="card">
-      <div class="row"><h2>Kayıtlı takipler</h2><button id="refresh">Yenile</button></div>
-      <div id="searches" class="list"></div>
+      <div class="section-head">
+        <h2>Kayıtlı takipler</h2>
+        <button class="secondary" id="refreshBtn">Yenile</button>
+      </div>
+      <div id="watchList" class="watch-list"></div>
+    </section>
+
+    <section class="card">
+      <h2>Son bildirim olayları</h2>
+      <div id="events" class="events"></div>
     </section>
   </main>
 
-  <template id="searchTpl">
-    <article class="search-card">
-      <h3></h3>
-      <div class="badges"></div>
-      <p class="sources"></p>
-      <p class="count"></p>
-      <p class="date"></p>
-      <p class="status"></p>
-      <div class="linkBtns"></div>
-      <div class="actions wrap">
-        <button class="run">Şimdi kontrol et</button>
-        <button class="toggle">Aktif/Pasif</button>
-        <button class="show">Listeyi göster</button>
-        <button class="delete danger">Takibi sil</button>
-      </div>
-      <div class="intervalBox"><select class="interval"><option value="1">1 saatte bir</option><option value="2">2 saatte bir</option><option value="3">3 saatte bir</option><option value="4">4 saatte bir</option><option value="6">6 saatte bir</option><option value="8">8 saatte bir</option><option value="12">12 saatte bir</option><option value="24">24 saatte bir</option><option value="48">48 saatte bir</option><option value="72">72 saatte bir</option></select><button class="saveInterval">Süreyi kaydet</button></div>
-      <div class="items"></div>
-    </article>
-  </template>
-
-  <script>
-  // Eski PWA sürümleri (v12-v19) formu eski kodla çalıştırmasın.
-  (async()=>{
-    try{
-      if('serviceWorker' in navigator){
-        const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map(r=>r.unregister()));
-      }
-      if(window.caches){
-        const keys = await caches.keys();
-        await Promise.all(keys.map(k=>caches.delete(k)));
-      }
-    }catch(e){}
-  })();
-</script>
-<script src="/static/app.js?v=20"></script>
+  <div id="toast" class="toast"></div>
+  <script src="/static/app.js?v=21"></script>
 </body>
 </html>
