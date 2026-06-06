@@ -1,1157 +1,782 @@
+import json
 import os
 import re
-import json
-import time
 import sqlite3
 import threading
-import traceback
-import smtplib
-from dataclasses import dataclass
+import time
 from datetime import datetime, timezone, timedelta
-from email.mime.text import MIMEText
-from html import unescape
-from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote, urlencode, urljoin, urlparse
+from pathlib import Path
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
-from flask import Flask, jsonify, render_template, request, redirect
+from apscheduler.schedulers.background import BackgroundScheduler
+from flask import Flask, jsonify, redirect, render_template, request
 
-VERSION = "v22-db-temiz-baslatma"
-APP_NAME = "Araç Avcısı"
+VERSION = "v24-bildirim-testli-stabil"
+APP = Flask(__name__)
+APP.secret_key = os.environ.get("SECRET_KEY", "arac-avcisi-v23")
 
-DATA_DIR = os.getenv("DATA_DIR", "data") or "data"
-try:
-    os.makedirs(DATA_DIR, exist_ok=True)
-except Exception:
-    # Render Free plan veya eski /data ayarı sorun çıkarırsa uygulama düşmesin.
-    DATA_DIR = "data"
-    os.makedirs(DATA_DIR, exist_ok=True)
-DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.sqlite3")
+DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DATA_DIR / "arac_avcisi_v23.db"
+REQ_TIMEOUT = int(os.environ.get("REQ_TIMEOUT", "18"))
+MAX_RESULTS_PER_SOURCE = int(os.environ.get("MAX_RESULTS_PER_SOURCE", "25"))
 
-DEFAULT_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4") or 4)
-SCHEDULER_TICK_MINUTES = int(os.getenv("SCHEDULER_TICK_MINUTES", "15") or 15)
-ENABLE_SCHEDULER = os.getenv("ENABLE_SCHEDULER", "1") != "0"
-
-REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "18") or 18)
-JINA_TIMEOUT = int(os.getenv("JINA_TIMEOUT", "24") or 24)
-MAX_ITEMS_PER_SOURCE = int(os.getenv("MAX_ITEMS_PER_SOURCE", "12") or 12)
-MAX_TOTAL_ITEMS = int(os.getenv("MAX_TOTAL_ITEMS", "60") or 60)
-
-app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-local-secret")
-
-SESSION = requests.Session()
-SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.7,en;q=0.6",
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.5,en;q=0.3",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Cache-Control": "no-cache",
-})
+}
 
-BRANDS = {
+SOURCES = {
+    "sahibinden": {"label": "Sahibinden", "domain": "sahibinden.com"},
+    "arabam": {"label": "Arabam", "domain": "arabam.com"},
+    "otoplus": {"label": "Otoplus", "domain": "otoplus.com"},
+    "otokoc": {"label": "Otokoç 2. El", "domain": "otokocikinciel.com"},
+    "vavacars": {"label": "VavaCars", "domain": "vava.cars"},
+    "arabasepeti": {"label": "Araba Sepeti", "domain": "arabasepeti.com"},
+    "arabalar": {"label": "Arabalar.com", "domain": "arabalar.com"},
+    "letgo": {"label": "Letgo", "domain": "letgo.com"},
+    "facebook": {"label": "Facebook Marketplace", "domain": "facebook.com"},
+}
+
+# Liste hazır gelsin ama eksik kalırsa kullanıcı özel marka/model/paket yazabilir.
+VEHICLE_DATA = {
     "Volkswagen": {
-        "Tiguan": [
-            "Farketmez",
-            "1.4 TSI Comfortline",
-            "1.4 TSI Highline",
-            "1.4 TSI Trend & Fun",
-            "1.4 TSI Sport & Style",
-            "1.5 TSI Comfortline",
-            "1.5 TSI Highline",
-            "1.5 TSI R-Line",
-            "2.0 TDI Comfortline",
-            "2.0 TDI Highline",
-        ],
-        "Passat": ["Farketmez", "1.4 TSI Comfortline", "1.5 TSI Business", "1.6 TDI Comfortline", "2.0 TDI Highline"],
-        "Golf": ["Farketmez", "1.0 TSI Comfortline", "1.2 TSI Comfortline", "1.4 TSI Highline", "1.6 TDI Comfortline"],
+        "Tiguan": ["Farketmez", "1.4 TSI Comfortline", "1.4 TSI Highline", "1.4 TSI Life", "1.5 TSI Life", "1.5 TSI Elegance", "1.5 TSI R-Line", "2.0 TDI Comfortline", "2.0 TDI Highline", "2.0 TDI R-Line"],
+        "Passat": ["Farketmez", "1.4 TSI Comfortline", "1.4 TSI Highline", "1.5 TSI Business", "1.5 TSI Elegance", "1.6 TDI Comfortline", "1.6 TDI Highline", "2.0 TDI Highline"],
+        "Golf": ["Farketmez", "1.0 TSI Midline", "1.2 TSI Comfortline", "1.4 TSI Highline", "1.5 eTSI Life", "1.5 eTSI Style", "1.5 eTSI R-Line"],
+        "Polo": ["Farketmez", "1.0 MPI Trendline", "1.0 TSI Comfortline", "1.0 TSI Life", "1.0 TSI Style"],
+        "T-Roc": ["Farketmez", "1.5 TSI Life", "1.5 TSI Style", "1.5 TSI R-Line"],
+        "Jetta": ["Farketmez", "1.2 TSI Trendline", "1.4 TSI Comfortline", "1.6 TDI Comfortline", "1.6 TDI Highline"],
     },
     "Honda": {
-        "Civic": ["Farketmez", "1.6 Eco Elegance", "1.6 Eco Executive", "1.6 i-VTEC Elegance", "1.5 VTEC Turbo"],
-        "CR-V": ["Farketmez", "1.5 VTEC Turbo Executive", "2.0 i-VTEC Elegance"],
+        "Civic": ["Farketmez", "1.6 Eco Elegance", "1.6 Eco Executive", "1.5 VTEC Turbo Elegance", "1.5 VTEC Turbo Executive", "1.6 i-VTEC Elegance", "1.6 i-VTEC Executive"],
+        "CR-V": ["Farketmez", "1.5 VTEC Turbo Elegance", "1.5 VTEC Turbo Executive", "2.0 i-VTEC Executive"],
+        "HR-V": ["Farketmez", "1.5 i-VTEC Elegance", "1.5 e:HEV Advance", "1.5 e:HEV Style"],
+        "City": ["Farketmez", "1.5 Executive", "1.5 Elegance"],
+        "Jazz": ["Farketmez", "1.4 i-VTEC Joy", "1.4 i-VTEC Fun", "1.5 e:HEV Executive"],
     },
     "Toyota": {
-        "Corolla": ["Farketmez", "1.5 Vision", "1.5 Dream", "1.6 Flame", "1.6 Passion"],
-        "C-HR": ["Farketmez", "1.8 Hybrid Flame", "1.8 Hybrid Passion"],
+        "Corolla": ["Farketmez", "1.33 Life", "1.6 Dream", "1.6 Flame", "1.6 Vision", "1.8 Hybrid Dream", "1.8 Hybrid Flame", "1.8 Hybrid Passion"],
+        "C-HR": ["Farketmez", "1.2 Turbo Advance", "1.2 Turbo Diamond", "1.8 Hybrid Flame", "1.8 Hybrid Passion"],
+        "Yaris": ["Farketmez", "1.0 Life", "1.5 Dream", "1.5 Hybrid Dream", "1.5 Hybrid Passion"],
+        "RAV4": ["Farketmez", "2.0 Elegant", "2.5 Hybrid Passion", "2.5 Hybrid Premium"],
     },
     "Renault": {
-        "Megane": ["Farketmez", "1.3 TCe Joy", "1.5 dCi Touch", "1.5 Blue dCi Icon"],
-        "Clio": ["Farketmez", "1.0 TCe Joy", "1.0 TCe Touch", "1.5 dCi Icon"],
+        "Clio": ["Farketmez", "1.0 TCe Joy", "1.0 TCe Touch", "1.0 TCe Icon", "1.5 dCi Joy", "1.5 dCi Touch", "1.5 dCi Icon"],
+        "Megane": ["Farketmez", "1.3 TCe Joy", "1.3 TCe Touch", "1.3 TCe Icon", "1.5 dCi Touch", "1.5 dCi Icon"],
+        "Captur": ["Farketmez", "1.0 TCe Touch", "1.3 TCe Icon", "1.5 dCi Icon"],
+        "Kadjar": ["Farketmez", "1.5 dCi Touch", "1.5 dCi Icon", "1.3 TCe Icon"],
     },
-    "Ford": {
-        "Kuga": ["Farketmez", "1.5 EcoBoost Style", "1.5 EcoBoost Titanium", "1.5 EcoBlue Titanium"],
-        "Focus": ["Farketmez", "1.5 TDCi Trend X", "1.5 EcoBlue Titanium"],
+    "Fiat": {
+        "Egea": ["Farketmez", "1.4 Fire Easy", "1.4 Fire Urban", "1.3 Multijet Easy", "1.3 Multijet Urban", "1.6 Multijet Lounge", "1.6 E-Torq Urban"],
+        "Doblo": ["Farketmez", "1.3 Multijet Easy", "1.6 Multijet Premio", "1.6 Multijet Safeline"],
+        "Fiorino": ["Farketmez", "1.3 Multijet Pop", "1.3 Multijet Premio", "1.3 Multijet Safeline"],
     },
     "Hyundai": {
-        "Tucson": ["Farketmez", "1.6 T-GDI Elite", "1.6 CRDi Elite", "1.6 T-GDI N Line"],
-        "i20": ["Farketmez", "1.4 MPI Jump", "1.4 MPI Style", "1.0 T-GDI Elite"],
+        "i20": ["Farketmez", "1.2 MPI Jump", "1.4 MPI Style", "1.4 MPI Elite", "1.0 T-GDI Style"],
+        "i30": ["Farketmez", "1.4 MPI Style", "1.6 CRDi Style", "1.6 CRDi Elite"],
+        "Tucson": ["Farketmez", "1.6 GDI Style", "1.6 T-GDI Elite", "1.6 CRDi Elite", "1.6 T-GDI N Line"],
+        "Bayon": ["Farketmez", "1.4 MPI Jump", "1.4 MPI Style", "1.0 T-GDI Elite"],
     },
-    "Kia": {
-        "Sportage": ["Farketmez", "1.6 GDI Comfort", "1.6 T-GDI Prestige", "1.6 CRDi Elegance"],
+    "Ford": {
+        "Focus": ["Farketmez", "1.0 EcoBoost Trend X", "1.5 TDCi Trend X", "1.5 TDCi Titanium", "1.6 TDCi Titanium"],
+        "Kuga": ["Farketmez", "1.5 EcoBoost Style", "1.5 EcoBoost Titanium", "1.5 EcoBoost ST-Line", "2.0 TDCi Titanium"],
+        "Fiesta": ["Farketmez", "1.1 Trend", "1.0 EcoBoost Titanium", "1.5 TDCi Titanium"],
+        "Puma": ["Farketmez", "1.0 EcoBoost Style", "1.0 EcoBoost Titanium", "1.0 EcoBoost ST-Line"],
     },
+    "Peugeot": {
+        "3008": ["Farketmez", "1.2 PureTech Active", "1.2 PureTech Allure", "1.5 BlueHDi Active", "1.5 BlueHDi Allure", "1.5 BlueHDi GT Line"],
+        "2008": ["Farketmez", "1.2 PureTech Active", "1.2 PureTech Allure", "1.5 BlueHDi Allure", "1.5 BlueHDi GT Line"],
+        "308": ["Farketmez", "1.2 PureTech Active", "1.2 PureTech Allure", "1.6 BlueHDi Allure"],
+    },
+    "Opel": {
+        "Astra": ["Farketmez", "1.4 Turbo Enjoy", "1.4 Turbo Excellence", "1.5 Diesel Elegance", "1.6 CDTI Enjoy"],
+        "Corsa": ["Farketmez", "1.2 Edition", "1.2 Elegance", "1.2 Turbo Elegance", "1.5 Diesel Edition"],
+        "Grandland": ["Farketmez", "1.2 Turbo Edition", "1.2 Turbo Elegance", "1.5 Diesel Elegance"],
+    },
+    "BMW": {"3 Serisi": ["Farketmez", "316i", "318i", "320i", "320d"], "5 Serisi": ["Farketmez", "520i", "520d", "530i", "530d"], "X1": ["Farketmez", "sDrive18i", "sDrive18d", "xDrive20d"], "X3": ["Farketmez", "xDrive20d", "xDrive30i"]},
+    "Mercedes-Benz": {"C Serisi": ["Farketmez", "C180 AMG", "C200d AMG", "C200 4Matic"], "E Serisi": ["Farketmez", "E180", "E200", "E220d"], "GLA": ["Farketmez", "GLA 180", "GLA 200", "GLA 200d"], "A Serisi": ["Farketmez", "A180", "A200", "A180d"]},
+    "Audi": {"A3": ["Farketmez", "1.0 TFSI", "1.4 TFSI", "1.6 TDI", "30 TFSI", "35 TFSI"], "A4": ["Farketmez", "1.4 TFSI", "2.0 TDI", "40 TDI", "40 TFSI"], "Q3": ["Farketmez", "1.4 TFSI", "35 TFSI", "35 TDI"], "Q5": ["Farketmez", "2.0 TDI", "40 TDI", "45 TFSI"]},
 }
 
-CITIES = ["Tüm Türkiye", "İstanbul", "Ankara", "İzmir", "Kocaeli", "Bursa", "Konya", "Eskişehir", "Sakarya", "Yalova", "Düzce", "Balıkesir", "Tokat", "Antalya", "Adana", "Kayseri", "Gaziantep"]
-INTERVALS = [1, 2, 3, 4, 6, 8, 12, 24, 48, 72]
-FUELS = ["Farketmez", "Benzin", "Dizel", "Benzin & LPG", "Hibrit", "Elektrik"]
+CITIES = ["Tüm Türkiye", "Adana", "Ankara", "Antalya", "Balıkesir", "Bursa", "Eskişehir", "İstanbul", "İzmir", "Kocaeli", "Konya", "Sakarya", "Tekirdağ", "Yalova"]
 TRANSMISSIONS = ["Farketmez", "Otomatik", "Yarı Otomatik", "Manuel"]
+FUELS = ["Farketmez", "Benzin", "Dizel", "LPG", "Hibrit", "Elektrik"]
+SUV_MODELS = {"Tiguan", "T-Roc", "Kuga", "Tucson", "3008", "2008", "C-HR", "RAV4", "CR-V", "HR-V", "Kadjar", "Captur", "Puma", "Grandland", "X1", "X3", "Q3", "Q5", "GLA"}
 
-@dataclass
-class Source:
-    key: str
-    name: str
-    base: str
-    search_mode: str = "direct_and_jina"
+TR_MAP = str.maketrans("çğıöşüÇĞİÖŞÜ", "cgiosuCGIOSU")
 
-SOURCES = [
-    Source("sahibinden", "Sahibinden", "https://www.sahibinden.com"),
-    Source("arabam", "Arabam", "https://www.arabam.com"),
-    Source("otoplus", "Otoplus", "https://www.otoplus.com"),
-    Source("otokoc", "Otokoç 2. El", "https://www.otokocikinciel.com"),
-    Source("vavacars", "VavaCars", "https://tr.vava.cars"),
-    Source("arabasepeti", "Araba Sepeti", "https://www.arabasepeti.com"),
-    Source("arabalar", "Arabalar.com", "https://www.arabalar.com.tr"),
-    Source("letgo", "Letgo", "https://www.letgo.com"),
-    Source("facebook", "Facebook Marketplace", "https://www.facebook.com"),
-]
-SOURCE_MAP = {s.key: s for s in SOURCES}
+def now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
-VEHICLE_CATEGORY = {
-    ("Volkswagen", "Tiguan"): "suv",
-    ("Ford", "Kuga"): "suv",
-    ("Hyundai", "Tucson"): "suv",
-    ("Kia", "Sportage"): "suv",
-    ("Toyota", "C-HR"): "suv",
-    ("Honda", "CR-V"): "suv",
-}
+def tr_slug(s):
+    s = (s or "").translate(TR_MAP).lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    return re.sub(r"-+", "-", s).strip("-")
 
-BAD_TITLE_PARTS = [
-    "filtrele", "arama", "favori arama", "araçları listeleniyor", "sonuç bulunamadı",
-    "mobil uygulamalar", "anasayfa", "giriş yap", "üye ol", "çerez", "yardım",
-    "hemen sat", "aracımı nasıl satarım", "karşılaştır", "favorilerimde", "gizle", "göster",
-]
+def norm(s):
+    return re.sub(r"\s+", " ", (s or "").translate(TR_MAP).lower()).strip()
 
-# ------------------------- DB -------------------------
+def int_only(v):
+    if v is None or v == "": return None
+    m = re.sub(r"[^0-9]", "", str(v))
+    return int(m) if m else None
+
+def parse_price(text):
+    if not text: return None
+    pats = [r"(\d{1,3}(?:[\.\s]\d{3})+|\d{6,9})\s*(?:tl|₺)", r"(?:tl|₺)\s*(\d{1,3}(?:[\.\s]\d{3})+|\d{6,9})"]
+    for p in pats:
+        m = re.search(p, text, flags=re.I)
+        if m:
+            n = int_only(m.group(1))
+            if n and 10000 <= n <= 20000000: return n
+    return None
+
+def parse_year(text):
+    if not text: return None
+    years = [int(y) for y in re.findall(r"\b(19[8-9]\d|20[0-3]\d)\b", text)]
+    if not years: return None
+    return max([y for y in years if 1980 <= y <= 2035], default=None)
+
+def parse_km(text):
+    if not text: return None
+    pats = [r"(\d{1,3}(?:[\.\s]\d{3})+|\d{4,7})\s*(?:km|kilometre)", r"km\s*(\d{1,3}(?:[\.\s]\d{3})+|\d{4,7})"]
+    vals = []
+    for p in pats:
+        for m in re.finditer(p, text, flags=re.I):
+            n = int_only(m.group(1))
+            if n and 0 <= n <= 1000000:
+                vals.append(n)
+    return min(vals) if vals else None
+
+def money(n):
+    if n is None: return "Fiyat yok"
+    return f"{n:,}".replace(",", ".") + " TL"
+
+def km_text(n):
+    if n is None: return ""
+    return f"{n:,}".replace(",", ".") + " km"
 
 def db():
     con = sqlite3.connect(DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
     return con
 
-
-def table_columns(con: sqlite3.Connection, table: str) -> List[str]:
-    try:
-        return [r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()]
-    except Exception:
-        return []
-
-
-def add_column_if_missing(con, table, col, coldef):
-    cols = table_columns(con, table)
-    if col not in cols:
-        con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coldef}")
-
-
 def init_db():
-    with db() as con:
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS watches(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                brand TEXT NOT NULL,
-                model TEXT NOT NULL,
-                package TEXT DEFAULT 'Farketmez',
-                city TEXT DEFAULT 'Tüm Türkiye',
-                min_year INTEGER,
-                max_year INTEGER,
-                max_km INTEGER,
-                min_price INTEGER,
-                max_price INTEGER,
-                fuel TEXT DEFAULT 'Farketmez',
-                transmission TEXT DEFAULT 'Farketmez',
-                sources TEXT DEFAULT '[]',
-                interval_hours INTEGER DEFAULT 4,
-                active INTEGER DEFAULT 1,
-                email TEXT,
-                telegram_chat_id TEXT,
-                created_at TEXT,
-                updated_at TEXT,
-                last_checked_at TEXT,
-                next_check_at TEXT,
-                last_status TEXT DEFAULT '',
-                last_seen_count INTEGER DEFAULT 0,
-                last_new_count INTEGER DEFAULT 0,
-                last_drop_count INTEGER DEFAULT 0,
-                checking INTEGER DEFAULT 0
-            )
-        """)
-        # migrations for older DBs
-        for col, coldef in {
-            "name": "TEXT", "package": "TEXT DEFAULT 'Farketmez'", "city": "TEXT DEFAULT 'Tüm Türkiye'",
-            "min_year": "INTEGER", "max_year": "INTEGER", "max_km": "INTEGER", "min_price": "INTEGER", "max_price": "INTEGER",
-            "fuel": "TEXT DEFAULT 'Farketmez'", "transmission": "TEXT DEFAULT 'Farketmez'", "sources": "TEXT DEFAULT '[]'",
-            "interval_hours": "INTEGER DEFAULT 4", "active": "INTEGER DEFAULT 1", "email": "TEXT", "telegram_chat_id": "TEXT",
-            "created_at": "TEXT", "updated_at": "TEXT", "last_checked_at": "TEXT", "next_check_at": "TEXT", "last_status": "TEXT DEFAULT ''",
-            "last_seen_count": "INTEGER DEFAULT 0", "last_new_count": "INTEGER DEFAULT 0", "last_drop_count": "INTEGER DEFAULT 0", "checking": "INTEGER DEFAULT 0",
-        }.items():
-            add_column_if_missing(con, "watches", col, coldef)
-
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS items(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                watch_id INTEGER NOT NULL,
-                source TEXT NOT NULL,
-                title TEXT,
-                price INTEGER,
-                year INTEGER,
-                km INTEGER,
-                city TEXT,
-                url TEXT NOT NULL,
-                fingerprint TEXT NOT NULL,
-                first_seen_at TEXT,
-                last_seen_at TEXT,
-                price_last INTEGER,
-                is_active INTEGER DEFAULT 1,
-                UNIQUE(watch_id, fingerprint)
-            )
-        """)
-        for col, coldef in {
-            "price_last": "INTEGER", "is_active": "INTEGER DEFAULT 1", "city": "TEXT", "year": "INTEGER", "km": "INTEGER",
-        }.items():
-            add_column_if_missing(con, "items", col, coldef)
-
-        con.execute("""
-            CREATE TABLE IF NOT EXISTS events(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                watch_id INTEGER,
-                event_type TEXT,
-                source TEXT,
-                title TEXT,
-                price_old INTEGER,
-                price_new INTEGER,
-                url TEXT,
-                created_at TEXT
-            )
-        """)
-        con.commit()
-        cleanup_bad_items(con)
-
-
-def cleanup_bad_items(con=None):
-    close = False
-    if con is None:
-        con = db(); close = True
-    bad_like = ["%filtrele%", "%araçları listeleniyor%", "%sonuç bulunamadı%", "%aracımı nasıl satarım%", "%favori arama%"]
-    for pat in bad_like:
-        con.execute("DELETE FROM items WHERE lower(title) LIKE lower(?)", (pat,))
-    # Remove obvious category URLs that were stored as fake listing items
-    con.execute("DELETE FROM items WHERE source='otoplus' AND url NOT LIKE '%/ilan/%' AND title IN ('Volkswagen TIGUAN','VOLKSWAGEN TIGUAN','Filtrele')")
-    con.commit()
-    if close:
-        con.close()
-
-
-def now_iso():
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
-def parse_iso(s: Optional[str]) -> Optional[datetime]:
-    if not s:
-        return None
     try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
-        return None
-
-# ------------------------- Normalization -------------------------
-
-def tr_lower(s: str) -> str:
-    if not s:
-        return ""
-    return str(s).translate(str.maketrans("IİŞĞÜÖÇÂÎÛ", "ıişğüöçâîû")).lower()
-
-
-def ascii_slug(s: str) -> str:
-    s = tr_lower(s)
-    repl = {"ı":"i", "ğ":"g", "ü":"u", "ş":"s", "ö":"o", "ç":"c", "â":"a", "î":"i", "û":"u", "&":" ", "+":" ", ".":" ", "/":" ", "-":" "}
-    for k, v in repl.items():
-        s = s.replace(k, v)
-    s = re.sub(r"[^a-z0-9]+", "-", s)
-    return re.sub(r"-+", "-", s).strip("-")
-
-
-def clean_text(s: str) -> str:
-    s = unescape(s or "")
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
-
-
-def to_int(s) -> Optional[int]:
-    if s is None:
-        return None
-    if isinstance(s, int):
-        return s
-    raw = str(s)
-    # 1.650.000 TL -> 1650000, 98.202 km -> 98202
-    nums = re.findall(r"\d+", raw)
-    if not nums:
-        return None
-    val = int("".join(nums))
-    return val
-
-
-def price_to_int(text: str) -> Optional[int]:
-    if not text:
-        return None
-    m = re.search(r"(\d{1,3}(?:[\.\s]\d{3})+|\d{5,9})\s*(?:TL|₺|TRY)", text, flags=re.I)
-    if not m:
-        return None
-    return to_int(m.group(1))
-
-
-def km_to_int(text: str) -> Optional[int]:
-    if not text:
-        return None
-    m = re.search(r"(\d{1,3}(?:[\.\s]\d{3})+|\d{1,6})\s*(?:km|KM|Km)", text)
-    if not m:
-        return None
-    return to_int(m.group(1))
-
-
-def year_to_int(text: str) -> Optional[int]:
-    if not text:
-        return None
-    # Prefer model years around car range
-    years = [int(x) for x in re.findall(r"\b(19[8-9]\d|20[0-2]\d|2026)\b", text)]
-    if not years:
-        return None
-    # most listings put year first. choose plausible newest not current date if multiple
-    for y in years:
-        if 1980 <= y <= 2026:
-            return y
-    return years[0]
-
-
-def make_query(w: Dict) -> str:
-    parts = [w.get("brand"), w.get("model")]
-    pkg = w.get("package") or ""
-    if pkg and pkg != "Farketmez":
-        parts.append(pkg)
-    city = w.get("city") or ""
-    if city and city != "Tüm Türkiye":
-        parts.append(city)
-    if w.get("fuel") and w.get("fuel") != "Farketmez":
-        parts.append(w.get("fuel"))
-    if w.get("transmission") and w.get("transmission") != "Farketmez":
-        parts.append(w.get("transmission"))
-    return " ".join([p for p in parts if p]).strip()
-
-
-def title_matches_watch(title: str, w: Dict) -> bool:
-    if not title:
-        return False
-    low = tr_lower(title)
-    brand = tr_lower(w.get("brand", ""))
-    model = tr_lower(w.get("model", ""))
-    if brand and brand not in low:
-        # VW/Volkswagen tolerance
-        if brand == "volkswagen" and not re.search(r"\b(vw|volkswagen)\b", low):
-            return False
-    if model and model not in low:
-        return False
-    pkg = tr_lower(w.get("package", ""))
-    if pkg and pkg != "farketmez":
-        # Match important tokens only; avoid insisting on every engine token
-        tokens = [t for t in re.split(r"[^a-z0-9çğıöşü]+", pkg) if len(t) >= 3]
-        key_tokens = tokens[-2:] if len(tokens) > 2 else tokens
-        if key_tokens and not any(t in low for t in key_tokens):
-            return False
-    return True
-
-
-def looks_bad_title(title: str) -> bool:
-    low = tr_lower(title)
-    if len(low) < 8:
-        return True
-    return any(p in low for p in BAD_TITLE_PARTS)
-
-
-def apply_filters(item: Dict, w: Dict) -> bool:
-    # Always require title to match; prevents site menus from becoming fake cars
-    if not title_matches_watch(item.get("title", ""), w):
-        return False
-    if looks_bad_title(item.get("title", "")):
-        return False
-    # If value is present, it must pass. If missing, allow because search snippets can omit it.
-    try:
-        if item.get("price") is not None:
-            if w.get("min_price") and item["price"] < int(w["min_price"]): return False
-            if w.get("max_price") and item["price"] > int(w["max_price"]): return False
-        if item.get("year") is not None:
-            if w.get("min_year") and item["year"] < int(w["min_year"]): return False
-            if w.get("max_year") and item["year"] > int(w["max_year"]): return False
-        if item.get("km") is not None:
-            if w.get("max_km") and item["km"] > int(w["max_km"]): return False
-    except Exception:
-        return False
-    return True
-
-# ------------------------- URL builders -------------------------
-
-def is_suv(w: Dict) -> bool:
-    return VEHICLE_CATEGORY.get((w.get("brand"), w.get("model"))) == "suv"
-
-
-def arabam_category_path(w: Dict) -> str:
-    base_cat = "arazi-suv-pick-up" if is_suv(w) else "otomobil"
-    slug = "-".join([ascii_slug(w.get("brand", "")), ascii_slug(w.get("model", ""))])
-    pkg = w.get("package") or ""
-    if pkg and pkg != "Farketmez":
-        slug += "-" + ascii_slug(pkg)
-    return f"/ikinci-el/{base_cat}/{slug}"
-
-
-def sahibinden_category_path(w: Dict) -> str:
-    cat = "arazi-suv-pickup" if is_suv(w) else "otomobil"
-    slug = "-".join([ascii_slug(w.get("brand", "")), ascii_slug(w.get("model", ""))])
-    pkg = w.get("package") or ""
-    if pkg and pkg != "Farketmez":
-        slug += "-" + ascii_slug(pkg)
-    path = f"/{cat}-{slug}"
-    trans = tr_lower(w.get("transmission", ""))
-    if "otomatik" in trans and "yarı" not in trans and "yari" not in trans:
-        path += "/otomatik"
-    elif "manuel" in trans:
-        path += "/manuel"
-    return path
-
-
-def otoplus_path(w: Dict) -> str:
-    brand = ascii_slug(w.get("brand", ""))
-    model = ascii_slug(w.get("model", ""))
-    pkg = ascii_slug(w.get("package", "")) if w.get("package") and w.get("package") != "Farketmez" else ""
-    if brand == "volkswagen" and model == "tiguan" and pkg:
-        if "14-tsi-comfortline" in pkg or "1-4-tsi-comfortline" in pkg:
-            return "/volkswagen/tiguan/tiguan-1.4-tsi-bmt-125-comfortline"
-        if "highline" in pkg:
-            return "/volkswagen/tiguan/tiguan-1.4-tsi-act-bmt-150-dsg-highline"
-    return f"/{brand}/{model}"
-
-
-def direct_url(source_key: str, w: Dict) -> str:
-    q = make_query(w)
-    city = w.get("city")
-    params = {}
-    if w.get("min_price"): params["price_min"] = str(w.get("min_price"))
-    if w.get("max_price"): params["price_max"] = str(w.get("max_price"))
-    if w.get("min_year"): params["year_min"] = str(w.get("min_year"))
-    if w.get("max_year"): params["year_max"] = str(w.get("max_year"))
-    if w.get("max_km"): params["km_max"] = str(w.get("max_km"))
-
-    if source_key == "sahibinden":
-        # Sahibinden's exact hidden filter ids differ by category; use correct category path plus general params.
-        p = sahibinden_category_path(w)
-        sbp = {"query_text": q}
-        if w.get("min_price"): sbp["price_min"] = str(w.get("min_price"))
-        if w.get("max_price"): sbp["price_max"] = str(w.get("max_price"))
-        if w.get("min_year"): sbp["a5_min"] = str(w.get("min_year"))
-        if w.get("max_year"): sbp["a5_max"] = str(w.get("max_year"))
-        if w.get("max_km"): sbp["a4_max"] = str(w.get("max_km"))
-        return "https://www.sahibinden.com" + p + "?" + urlencode(sbp)
-    if source_key == "arabam":
-        url = "https://www.arabam.com" + arabam_category_path(w)
-        ap = {}
-        if w.get("city") and w.get("city") != "Tüm Türkiye": ap["city"] = w.get("city")
-        if w.get("min_price"): ap["priceMin"] = str(w.get("min_price"))
-        if w.get("max_price"): ap["priceMax"] = str(w.get("max_price"))
-        if w.get("min_year"): ap["modelYearMin"] = str(w.get("min_year"))
-        if w.get("max_year"): ap["modelYearMax"] = str(w.get("max_year"))
-        if w.get("max_km"): ap["kmMax"] = str(w.get("max_km"))
-        return url + ("?" + urlencode(ap) if ap else "")
-    if source_key == "otoplus":
-        url = "https://www.otoplus.com" + otoplus_path(w)
-        op = {}
-        if w.get("max_price"): op["price_max"] = str(w.get("max_price"))
-        if w.get("min_year"): op["year_min"] = str(w.get("min_year"))
-        if w.get("max_km"): op["km_max"] = str(w.get("max_km"))
-        return url + ("?" + urlencode(op) if op else "")
-    if source_key == "otokoc":
-        return f"https://www.otokocikinciel.com/ikinci-el-{ascii_slug(w.get('brand',''))}-{ascii_slug(w.get('model',''))}?q={quote(q)}"
-    if source_key == "vavacars":
-        return f"https://tr.vava.cars/ikinci-el-araba?search={quote(q)}"
-    if source_key == "arabasepeti":
-        return f"https://www.arabasepeti.com/arama?search={quote(q)}"
-    if source_key == "arabalar":
-        return f"https://www.arabalar.com.tr/arama?search={quote(q)}"
-    if source_key == "letgo":
-        return f"https://www.letgo.com/tr-tr/arama?q={quote(q)}"
-    if source_key == "facebook":
-        return f"https://www.facebook.com/marketplace/search/?query={quote(q)}"
-    return "https://www.google.com/search?q=" + quote(q)
-
-
-def jina_site_query(source_key: str, w: Dict) -> str:
-    q = make_query(w)
-    # Keep the query compact; adding every numeric filter makes search engines return zero too often.
-    year_part = f" {w.get('min_year')}" if w.get("min_year") else ""
-    price_part = f" {w.get('max_price')} TL" if w.get("max_price") else ""
-    site_map = {
-        "sahibinden": "site:sahibinden.com/ilan/vasita",
-        "arabam": "site:arabam.com/ilan",
-        "otoplus": "site:otoplus.com volkswagen tiguan OR ilan",
-        "otokoc": "site:otokocikinciel.com/ilan",
-        "vavacars": "site:tr.vava.cars",
-        "arabasepeti": "site:arabasepeti.com/ilan",
-        "arabalar": "site:arabalar.com.tr/ilan",
-        "letgo": "site:letgo.com",
-        "facebook": "site:facebook.com/marketplace",
-    }
-    return f"{site_map.get(source_key, '')} {q}{year_part}{price_part} ikinci el".strip()
-
-# ------------------------- Fetching / parsing -------------------------
-
-def fetch_url(url: str) -> Tuple[int, str, str]:
-    try:
-        r = SESSION.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
-        text = r.text or ""
-        return r.status_code, text, r.url
+        _init_db_inner()
     except Exception as e:
-        return 0, f"ERROR: {type(e).__name__}: {e}", url
-
-
-def fetch_reader(url: str) -> Tuple[int, str]:
-    try:
-        rr = SESSION.get("https://r.jina.ai/" + url, timeout=JINA_TIMEOUT, headers={"Accept": "text/plain"})
-        return rr.status_code, rr.text or ""
-    except Exception as e:
-        return 0, f"ERROR: {type(e).__name__}: {e}"
-
-
-def fetch_jina_search(query: str) -> Tuple[int, str]:
-    try:
-        url = "https://s.jina.ai/" + quote(query)
-        r = SESSION.get(url, timeout=JINA_TIMEOUT, headers={"Accept": "text/plain"})
-        return r.status_code, r.text or ""
-    except Exception as e:
-        return 0, f"ERROR: {type(e).__name__}: {e}"
-
-
-def extract_city(text: str) -> Optional[str]:
-    if not text:
-        return None
-    low = tr_lower(text)
-    for c in CITIES:
-        if c != "Tüm Türkiye" and tr_lower(c) in low:
-            return c
-    # common pattern: price + date + city district
-    return None
-
-
-def canonical_url(url: str) -> str:
-    if not url:
-        return ""
-    url = url.strip()
-    parsed = urlparse(url)
-    if not parsed.scheme:
-        return url
-    # remove known tracking params
-    q = []
-    for kv in parsed.query.split("&") if parsed.query else []:
-        if kv and not kv.lower().startswith(("utm_", "fbclid", "gclid")):
-            q.append(kv)
-    return parsed._replace(query="&".join(q), fragment="").geturl()
-
-
-def fingerprint_for(source: str, url: str, title: str) -> str:
-    cu = canonical_url(url)
-    # Listing URLs are best fingerprint; category/search URLs need title too.
-    if "/ilan/" in cu or "sahibinden.com/ilan" in cu:
-        return f"{source}:{cu}"
-    return f"{source}:{cu}:{ascii_slug(title)[:80]}"
-
-
-def make_item(source_key: str, title: str, url: str, block: str = "") -> Dict:
-    text = clean_text((title or "") + " " + (block or ""))
-    return {
-        "source": source_key,
-        "title": clean_text(title)[:180],
-        "price": price_to_int(text),
-        "year": year_to_int(text),
-        "km": km_to_int(text),
-        "city": extract_city(text),
-        "url": canonical_url(url),
-    }
-
-
-def parse_html_links(source_key: str, html: str, final_url: str, w: Dict) -> List[Dict]:
-    items = []
-    if not html or html.startswith("ERROR:"):
-        return items
-    soup = BeautifulSoup(html, "html.parser")
-    base = f"{urlparse(final_url).scheme}://{urlparse(final_url).netloc}"
-    for a in soup.find_all("a", href=True):
-        href = a.get("href") or ""
-        text = clean_text(a.get_text(" "))
-        if not text or looks_bad_title(text):
-            continue
-        url = urljoin(base, href)
-        # Require candidate listing-ish URLs OR strong title match with enough metadata around it.
-        parent = a.find_parent()
-        block = clean_text(parent.get_text(" ") if parent else text)
-        listing_like = any(x in url for x in ["/ilan/", "/ikinci-el/", "/arac/", "/vasita-"]) or title_matches_watch(text, w)
-        if not listing_like:
-            continue
-        item = make_item(source_key, text, url, block)
-        if apply_filters(item, w):
-            items.append(item)
-    return items
-
-
-def parse_reader_markdown(source_key: str, md: str, page_url: str, w: Dict) -> List[Dict]:
-    if not md or md.startswith("ERROR:"):
-        return []
-    lines = [clean_text(l) for l in md.splitlines() if clean_text(l)]
-    items: List[Dict] = []
-
-    # 1) markdown links around listing URLs
-    link_pat = re.compile(r"\[([^\]]{8,200})\]\((https?://[^\)]+)\)")
-    for m in link_pat.finditer(md):
-        title, url = clean_text(m.group(1)), m.group(2)
-        around = md[max(0, m.start()-500):m.end()+700]
-        if title_matches_watch(title, w):
-            item = make_item(source_key, title, url, around)
-            if apply_filters(item, w):
-                items.append(item)
-
-    # 2) source-specific block extraction from markdown/text
-    joined = "\n".join(lines)
-    brand_model = f"{w.get('brand','')} {w.get('model','')}".strip()
-    package = w.get("package") if w.get("package") != "Farketmez" else ""
-
-    # Otoplus pattern: Volkswagen TIGUAN2017 \n ## TIGUAN 1.4... \n 1.650.000 TL \n ### 98.202 KM
-    if source_key == "otoplus":
-        blocks = re.split(r"(?=\b(?:Volkswagen|Honda|Toyota|Renault|Ford|Hyundai|Kia)\b)", joined, flags=re.I)
-        for b in blocks:
-            if not title_matches_watch(b[:300], w):
-                continue
-            if not price_to_int(b):
-                continue
-            title_line = None
-            for line in b.splitlines():
-                line = line.strip("# ")
-                if title_matches_watch(line, w) and not looks_bad_title(line):
-                    title_line = line
-                    break
-            if not title_line:
-                title_line = brand_model + (" " + package if package else "")
-            item = make_item(source_key, title_line, page_url, b)
-            # Otoplus category page isn't an individual ad. Keep only if it is real enough: price, year, km and package in title/block.
-            if item.get("price") and item.get("year") and item.get("km") and apply_filters(item, w):
-                items.append(item)
-
-    # Arabam and Sahibinden reader output often has blocks starting with model name and then title/year/km/price/city.
-    if source_key in ("arabam", "sahibinden"):
-        # Break on repeated brand/model headings.
-        pattern = re.escape(w.get("brand", "")) + r"\s+" + re.escape(w.get("model", ""))
-        chunks = re.split(r"(?=" + pattern + r")", joined, flags=re.I)
-        for b in chunks:
-            if len(b) < 40 or not title_matches_watch(b[:350], w):
-                continue
-            if not price_to_int(b):
-                continue
-            # find title after first heading
-            candidate_lines = [l.strip("# •*- ") for l in b.splitlines() if l.strip()]
-            title_line = None
-            for line in candidate_lines[:8]:
-                if title_matches_watch(line, w) and not looks_bad_title(line):
-                    title_line = line
-                    break
-            if not title_line:
-                title_line = brand_model + (" " + package if package else "")
-            # Use page_url as fallback, but if block has a URL use it
-            url_match = re.search(r"https?://[^\s\)]+", b)
-            url = url_match.group(0) if url_match else page_url
-            item = make_item(source_key, title_line, url, b)
-            if apply_filters(item, w):
-                items.append(item)
-
-    # 3) generic: lines with price and title match nearby
-    for i, line in enumerate(lines):
-        if price_to_int(line) or title_matches_watch(line, w):
-            block = "\n".join(lines[max(0, i-5): i+10])
-            if not price_to_int(block):
-                continue
-            if not title_matches_watch(block, w):
-                continue
-            # Don't create fake item if no useful metadata and page URL is just search homepage
-            title = None
-            for l in lines[max(0, i-5): i+5]:
-                if title_matches_watch(l, w) and not looks_bad_title(l):
-                    title = l.strip("# •*- ")
-                    break
-            if not title:
-                continue
-            item = make_item(source_key, title, page_url, block)
-            if apply_filters(item, w):
-                items.append(item)
-
-    return dedupe_items(items)[:MAX_ITEMS_PER_SOURCE]
-
-
-def parse_jina_search_results(source_key: str, md: str, w: Dict) -> List[Dict]:
-    if not md or md.startswith("ERROR:"):
-        return []
-    items = []
-    # Jina search often returns blocks with Title / URL Source / Description or markdown links.
-    block_pat = re.compile(r"Title:\s*(.*?)\nURL Source:\s*(https?://\S+)(.*?)(?=\nTitle:|\Z)", re.S | re.I)
-    for m in block_pat.finditer(md):
-        title = clean_text(m.group(1))
-        url = m.group(2).strip()
-        block = clean_text(m.group(3))
-        if not title_matches_watch(title + " " + block, w):
-            continue
-        # Must belong to target domain
-        host = urlparse(url).netloc.lower()
-        src = SOURCE_MAP.get(source_key)
-        if src and urlparse(src.base).netloc.replace("www.", "") not in host.replace("www.", ""):
-            continue
-        item = make_item(source_key, title, url, block)
-        if apply_filters(item, w):
-            items.append(item)
-
-    link_pat = re.compile(r"\[([^\]]{8,180})\]\((https?://[^\)]+)\)")
-    for m in link_pat.finditer(md):
-        title = clean_text(m.group(1))
-        url = m.group(2)
-        if not title_matches_watch(title, w):
-            continue
-        src = SOURCE_MAP.get(source_key)
-        if src and urlparse(src.base).netloc.replace("www.", "") not in urlparse(url).netloc.replace("www.", ""):
-            continue
-        around = md[max(0, m.start()-300):m.end()+600]
-        item = make_item(source_key, title, url, around)
-        if apply_filters(item, w):
-            items.append(item)
-
-    return dedupe_items(items)[:MAX_ITEMS_PER_SOURCE]
-
-
-def dedupe_items(items: List[Dict]) -> List[Dict]:
-    seen = set()
-    out = []
-    for it in items:
-        url = canonical_url(it.get("url", ""))
-        title = clean_text(it.get("title", ""))
-        if not url or not title:
-            continue
-        fp = (url.split("?")[0], ascii_slug(title)[:60])
-        if fp in seen:
-            continue
-        seen.add(fp)
-        out.append(it)
-    return out
-
-
-def scan_source(source_key: str, w: Dict) -> Tuple[List[Dict], str]:
-    status_parts = []
-    items: List[Dict] = []
-    url = direct_url(source_key, w)
-
-    code, html, final_url = fetch_url(url)
-    status_parts.append(f"HTTP {code}")
-    if code == 200 and html:
-        parsed = parse_html_links(source_key, html, final_url, w)
-        if parsed:
-            items.extend(parsed)
-            status_parts.append(f"html liste {len(parsed)}")
-        else:
-            status_parts.append("html liste yok")
-    elif code in (403, 429, 400, 401):
-        status_parts.append("doğrudan engel")
-
-    # Reader fallback for direct URL. It often works when raw HTML is JS-heavy.
-    if len(items) < 2:
-        rc, md = fetch_reader(url)
-        if rc == 200 and md:
-            parsed = parse_reader_markdown(source_key, md, url, w)
-            status_parts.append(f"reader ok {len(parsed)}")
-            items.extend(parsed)
-        else:
-            status_parts.append(f"reader {rc}")
-
-    # Search fallback through Jina Search. This is intentionally used only when direct/readers are empty-ish.
-    if len(items) < 2:
-        query = jina_site_query(source_key, w)
-        sc, smd = fetch_jina_search(query)
-        if sc == 200 and smd:
-            parsed = parse_jina_search_results(source_key, smd, w)
-            status_parts.append(f"jina arama {len(parsed)}")
-            items.extend(parsed)
-        else:
-            status_parts.append(f"jina arama {sc}")
-
-    items = dedupe_items([i for i in items if apply_filters(i, w)])[:MAX_ITEMS_PER_SOURCE]
-    return items, " / ".join(status_parts)
-
-# ------------------------- Notifications -------------------------
-
-def send_telegram(chat_id: str, text: str):
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = chat_id or os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        return False, "Telegram ayarı yok"
-    try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", data={"chat_id": chat_id, "text": text[:3900]}, timeout=12)
-        return r.status_code == 200, f"Telegram {r.status_code}"
-    except Exception as e:
-        return False, str(e)
-
-
-def send_mail(to_addr: str, subject: str, body: str):
-    if not to_addr:
-        return False, "mail yok"
-    host = os.getenv("SMTP_HOST", "")
-    port = int(os.getenv("SMTP_PORT", "587") or 587)
-    user = os.getenv("SMTP_USER", "")
-    pwd = os.getenv("SMTP_PASS", "")
-    from_addr = os.getenv("MAIL_FROM", user)
-    if not host or not user or not pwd:
-        return False, "SMTP ayarı yok"
-    try:
-        msg = MIMEText(body, "plain", "utf-8")
-        msg["Subject"] = subject
-        msg["From"] = from_addr
-        msg["To"] = to_addr
-        with smtplib.SMTP(host, port, timeout=15) as smtp:
-            smtp.starttls()
-            smtp.login(user, pwd)
-            smtp.send_message(msg)
-        return True, "mail ok"
-    except Exception as e:
-        return False, str(e)
-
-# ------------------------- Watch checking -------------------------
-
-def row_to_watch(r: sqlite3.Row) -> Dict:
-    d = dict(r)
-    try:
-        d["sources"] = json.loads(d.get("sources") or "[]")
-    except Exception:
-        d["sources"] = []
-    for k in ["min_year", "max_year", "max_km", "min_price", "max_price", "interval_hours"]:
-        if d.get(k) is not None:
-            try: d[k] = int(d[k])
-            except Exception: pass
-    return d
-
-
-def get_watch(watch_id: int) -> Optional[Dict]:
-    with db() as con:
-        r = con.execute("SELECT * FROM watches WHERE id=?", (watch_id,)).fetchone()
-        return row_to_watch(r) if r else None
-
-
-def save_check_results(watch: Dict, items: List[Dict], status_text: str):
-    watch_id = int(watch["id"])
-    now = now_iso()
-    new_count = 0
-    drop_count = 0
-    events = []
-    with db() as con:
-        cleanup_bad_items(con)
-        for item in items:
-            title = clean_text(item.get("title") or "")
-            url = canonical_url(item.get("url") or "")
-            if not title or not url:
-                continue
-            fp = fingerprint_for(item.get("source"), url, title)
-            existing = con.execute("SELECT * FROM items WHERE watch_id=? AND fingerprint=?", (watch_id, fp)).fetchone()
-            price = item.get("price")
-            if existing:
-                old_price = existing["price_last"] or existing["price"]
-                if price and old_price and price < old_price:
-                    drop_count += 1
-                    events.append(("price_drop", item.get("source"), title, old_price, price, url, now))
-                con.execute("""
-                    UPDATE items SET title=?, price=?, year=?, km=?, city=?, url=?, last_seen_at=?, price_last=?, is_active=1
-                    WHERE id=?
-                """, (title, price, item.get("year"), item.get("km"), item.get("city"), url, now, price or old_price, existing["id"]))
-            else:
-                new_count += 1
-                events.append(("new", item.get("source"), title, None, price, url, now))
-                con.execute("""
-                    INSERT INTO items(watch_id, source, title, price, year, km, city, url, fingerprint, first_seen_at, last_seen_at, price_last, is_active)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,1)
-                """, (watch_id, item.get("source"), title, price, item.get("year"), item.get("km"), item.get("city"), url, fp, now, now, price))
-        for ev in events:
-            con.execute("INSERT INTO events(watch_id,event_type,source,title,price_old,price_new,url,created_at) VALUES(?,?,?,?,?,?,?,?)", (watch_id, *ev))
-        total = con.execute("SELECT COUNT(*) FROM items WHERE watch_id=? AND is_active=1", (watch_id,)).fetchone()[0]
-        interval = int(watch.get("interval_hours") or DEFAULT_INTERVAL_HOURS)
-        next_time = (datetime.now(timezone.utc) + timedelta(hours=interval)).replace(microsecond=0).isoformat()
-        con.execute("""
-            UPDATE watches SET last_checked_at=?, next_check_at=?, last_status=?, last_seen_count=?, last_new_count=?, last_drop_count=?, checking=0, updated_at=?
-            WHERE id=?
-        """, (now, next_time, status_text[:1200], total, new_count, drop_count, now, watch_id))
-        con.commit()
-
-    # Notify only after first check if watch already had a last_checked_at.
-    if (new_count or drop_count) and watch.get("last_checked_at"):
-        lines = [f"Araç Avcısı: {watch.get('brand')} {watch.get('model')} için güncelleme"]
-        for ev in events[:8]:
-            evtype, src, title, old, newp, url, _t = ev
-            if evtype == "price_drop":
-                lines.append(f"Fiyat düştü: {title} | {old} -> {newp} TL | {url}")
-            else:
-                lines.append(f"Yeni ilan: {title} | {newp or 'Fiyat yok'} | {url}")
-        body = "\n".join(lines)
-        send_telegram(watch.get("telegram_chat_id"), body)
-        send_mail(watch.get("email"), "Araç Avcısı bildirimi", body)
-
-
-def run_check(watch_id: int):
-    watch = get_watch(watch_id)
-    if not watch:
-        return
-    with db() as con:
-        con.execute("UPDATE watches SET checking=1, last_status=? WHERE id=?", ("Kontrol başladı...", watch_id))
-        con.commit()
-    try:
-        sources = watch.get("sources") or [s.key for s in SOURCES]
-        all_items = []
-        status = []
-        for sk in sources:
-            if sk not in SOURCE_MAP:
-                continue
-            try:
-                items, st = scan_source(sk, watch)
-                all_items.extend(items)
-                status.append(f"{SOURCE_MAP[sk].name}: {st} / liste {len(items)}")
-            except Exception as e:
-                status.append(f"{SOURCE_MAP.get(sk, Source(sk, sk, '')).name}: hata {type(e).__name__}: {e}")
-        all_items = dedupe_items(all_items)[:MAX_TOTAL_ITEMS]
-        save_check_results(watch, all_items, "Kontrol tamamlandı. " + " ; ".join(status))
-    except Exception as e:
-        err = f"Kontrol hatası: {type(e).__name__}: {e}\n{traceback.format_exc()[-600:]}"
-        with db() as con:
-            con.execute("UPDATE watches SET checking=0, last_status=?, updated_at=? WHERE id=?", (err[:1200], now_iso(), watch_id))
-            con.commit()
-
-
-def start_check_thread(watch_id: int):
-    t = threading.Thread(target=run_check, args=(watch_id,), daemon=True)
-    t.start()
-
-_scheduler_started = False
-
-def scheduler_loop():
-    time.sleep(5)
-    while True:
+        backup = DB_PATH.with_suffix(f".bozuk_{int(time.time())}.db")
         try:
-            now = datetime.now(timezone.utc)
-            due_ids = []
-            with db() as con:
-                rows = con.execute("SELECT id,next_check_at,checking FROM watches WHERE active=1").fetchall()
-                for r in rows:
-                    if r["checking"]:
-                        continue
-                    nt = parse_iso(r["next_check_at"])
-                    if nt and nt <= now:
-                        due_ids.append(int(r["id"]))
-            for wid in due_ids[:5]:
-                start_check_thread(wid)
+            if DB_PATH.exists(): DB_PATH.rename(backup)
         except Exception:
             pass
-        time.sleep(max(60, SCHEDULER_TICK_MINUTES * 60))
+        _init_db_inner()
 
+def _init_db_inner():
+    with db() as con:
+        con.executescript("""
+        CREATE TABLE IF NOT EXISTS searches(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT, brand TEXT, model TEXT, variant TEXT, city TEXT,
+            min_year INTEGER, max_year INTEGER, max_km INTEGER, min_price INTEGER, max_price INTEGER,
+            fuel TEXT, transmission TEXT, sources TEXT,
+            interval_hours INTEGER DEFAULT 4, active INTEGER DEFAULT 1,
+            email TEXT, telegram_chat_id TEXT,
+            created_at TEXT, last_checked TEXT, last_status TEXT DEFAULT '', found_count INTEGER DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS listings(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_id INTEGER, listing_key TEXT, source TEXT, title TEXT, url TEXT,
+            price INTEGER, old_price INTEGER, year INTEGER, km INTEGER, city TEXT,
+            first_seen TEXT, last_seen TEXT,
+            UNIQUE(search_id, listing_key)
+        );
+        CREATE TABLE IF NOT EXISTS events(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_id INTEGER, event_type TEXT, source TEXT, title TEXT, url TEXT,
+            price INTEGER, old_price INTEGER, created_at TEXT, sent INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_listings_search ON listings(search_id);
+        CREATE INDEX IF NOT EXISTS idx_events_search ON events(search_id);
+        """)
 
-def start_scheduler_once():
-    global _scheduler_started
-    if _scheduler_started or not ENABLE_SCHEDULER:
-        return
-    _scheduler_started = True
-    t = threading.Thread(target=scheduler_loop, daemon=True)
+def row_to_dict(row):
+    d = dict(row)
+    if "sources" in d:
+        try: d["sources"] = json.loads(d["sources"] or "[]")
+        except Exception: d["sources"] = []
+    return d
+
+def search_terms(s):
+    parts = [s.get("brand"), s.get("model")]
+    if s.get("variant") and s.get("variant") != "Farketmez": parts.append(s.get("variant"))
+    return " ".join([p for p in parts if p])
+
+def source_open_url(source, s):
+    q = search_terms(s)
+    qenc = quote_plus(q)
+    brand = tr_slug(s.get("brand"))
+    model = tr_slug(s.get("model"))
+    variant = tr_slug(s.get("variant") if s.get("variant") != "Farketmez" else "")
+    city = tr_slug(s.get("city") if s.get("city") != "Tüm Türkiye" else "")
+    params = []
+    if s.get("min_price"): params.append(f"price_min={s['min_price']}")
+    if s.get("max_price"): params.append(f"price_max={s['max_price']}")
+    if s.get("min_year"): params.append(f"year_min={s['min_year']}")
+    if s.get("max_year"): params.append(f"year_max={s['max_year']}")
+    if s.get("max_km"): params.append(f"km_max={s['max_km']}")
+    qs = "&".join(params)
+    if source == "arabam":
+        cat = "arazi-suv-pick-up" if s.get("model") in SUV_MODELS else "otomobil"
+        path = f"https://www.arabam.com/ikinci-el/{cat}/{brand}-{model}"
+        if variant: path += f"-{variant}"
+        if city: path += f"-{city}"
+        return path + ("?" + qs if qs else "")
+    if source == "sahibinden":
+        # Sahibinden arama sayfası en dayanıklı açık linktir.
+        extra = []
+        if s.get("max_km"): extra.append(f"a4_max={s['max_km']}")
+        if s.get("min_year"): extra.append(f"a5_min={s['min_year']}")
+        if s.get("max_year"): extra.append(f"a5_max={s['max_year']}")
+        if s.get("min_price"): extra.append(f"price_min={s['min_price']}")
+        if s.get("max_price"): extra.append(f"price_max={s['max_price']}")
+        return "https://www.sahibinden.com/arama?query=" + qenc + ("&" + "&".join(extra) if extra else "")
+    if source == "facebook": return "https://www.facebook.com/marketplace/search/?query=" + qenc
+    if source == "letgo": return "https://www.letgo.com/search?q=" + qenc
+    if source == "vavacars": return "https://tr.vava.cars/ikinci-el-araba?search=" + qenc
+    if source == "otoplus": return f"https://www.otoplus.com/{brand}/{model}" + (f"/{brand}-{model}-{variant}" if variant else "")
+    if source == "otokoc": return f"https://www.otokocikinciel.com/ikinci-el-{brand}-{model}"
+    if source == "arabasepeti": return "https://www.arabasepeti.com/arama?search=" + qenc
+    if source == "arabalar": return f"https://www.arabalar.com/ikinci-el/{brand}/{model}"
+    return "https://www.google.com/search?q=" + quote_plus(q + " " + SOURCES.get(source, {}).get("domain", ""))
+
+def likely_listing_url(source, url, title, text):
+    u = urlparse(url)
+    full = norm(" ".join([url, title or "", text or ""]))
+    bad_words = ["arama", "search", "kategori", "category", "fiyatlari", "fiyatları", "liste", "listeleniyor", "filtrele", "compare", "favori"]
+    if any(w in full for w in bad_words) and not re.search(r"/ilan/|marketplace/item|/arac-|/vehicle|/detail|/detay", full):
+        return False
+    if source in ("arabam", "sahibinden"):
+        return "/ilan/" in u.path
+    if source == "facebook": return "/marketplace/item" in u.path
+    if source == "letgo": return any(x in u.path for x in ["/item", "/i/", "/ilan", "/ad/"])
+    if source == "vavacars": return any(x in u.path.lower() for x in ["detay", "detail", "arac", "vehicle"])
+    if source == "otoplus":
+        # Tekil değilse en az başlık/snippetten yıl-km-fiyat şartı aranır.
+        if any(x in u.path.lower() for x in ["detay", "detail", "arac-"]): return True
+        return parse_price(text) is not None and parse_year(text) is not None and parse_km(text) is not None
+    if source == "otokoc": return parse_price(text) is not None and parse_year(text) is not None and parse_km(text) is not None
+    if source in ("arabasepeti", "arabalar"):
+        if "/ilan" in u.path or "/arac" in u.path: return True
+        return parse_price(text) is not None and parse_year(text) is not None
+    return False
+
+def criteria_match(s, title, text, url, source):
+    hay = norm(" ".join([title or "", text or "", url or ""]))
+    brand = norm(s.get("brand"))
+    model = norm(s.get("model"))
+    variant = norm(s.get("variant"))
+    if brand and brand not in hay: return False
+    if model and model not in hay: return False
+    if variant and variant != "farketmez":
+        vtoks = [t for t in re.split(r"[^a-z0-9]+", variant) if len(t) > 1]
+        # Motor-paket çok sert olmasın ama yarısını yakalasın.
+        if vtoks:
+            hits = sum(1 for t in vtoks if t in hay)
+            if hits < max(1, len(vtoks)//2): return False
+    price = parse_price(text or title or "")
+    year = parse_year(text or title or "")
+    km = parse_km(text or title or "")
+    if price is not None:
+        if s.get("min_price") and price < s.get("min_price"): return False
+        if s.get("max_price") and price > s.get("max_price"): return False
+    if year is not None:
+        if s.get("min_year") and year < s.get("min_year"): return False
+        if s.get("max_year") and year > s.get("max_year"): return False
+    if km is not None and s.get("max_km") and km > s.get("max_km"): return False
+    if not likely_listing_url(source, url, title, text): return False
+    return True
+
+def listing_key(source, url):
+    u = urlparse(url)
+    path = re.sub(r"/$", "", u.path)
+    return source + ":" + u.netloc.replace("www.", "") + path
+
+def safe_get(url):
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=REQ_TIMEOUT, allow_redirects=True)
+        return r.status_code, r.text[:250000], str(r.url)
+    except Exception as e:
+        return 0, str(e), url
+
+def reader_get(url):
+    # Jina Reader: https://r.jina.ai/https://example.com
+    try:
+        r = requests.get("https://r.jina.ai/" + url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=REQ_TIMEOUT+12)
+        return r.status_code, r.text[:250000]
+    except Exception as e:
+        return 0, str(e)
+
+def search_jina(query):
+    try:
+        url = "https://s.jina.ai/" + quote_plus(query)
+        r = requests.get(url, headers={"User-Agent": HEADERS["User-Agent"]}, timeout=REQ_TIMEOUT+12)
+        if r.status_code != 200:
+            return r.status_code, []
+        txt = r.text[:250000]
+        return 200, parse_markdown_links(txt)
+    except Exception as e:
+        return 0, []
+
+def parse_markdown_links(txt):
+    items = []
+    # [title](url) markdown, then capture nearby text
+    for m in re.finditer(r"\[([^\]]{5,180})\]\((https?://[^\)\s]+)\)", txt):
+        title = re.sub(r"\s+", " ", m.group(1)).strip()
+        url = m.group(2).strip().rstrip(")")
+        start = max(0, m.start() - 300)
+        end = min(len(txt), m.end() + 700)
+        snippet = re.sub(r"\s+", " ", txt[start:end]).strip()
+        items.append({"title": title, "url": url, "text": snippet})
+    # Plain URLs fallback
+    for m in re.finditer(r"https?://[^\s\)\]<>\"]+", txt):
+        url = m.group(0).rstrip(".,)")
+        if any(x["url"] == url for x in items): continue
+        start = max(0, m.start() - 200)
+        end = min(len(txt), m.end() + 500)
+        snippet = re.sub(r"\s+", " ", txt[start:end]).strip()
+        title = snippet[:120] or url
+        items.append({"title": title, "url": url, "text": snippet})
+    return items
+
+def parse_html_links(source, html, base_url, s):
+    soup = BeautifulSoup(html, "html.parser")
+    out = []
+    for a in soup.find_all("a", href=True):
+        url = urljoin(base_url, a.get("href"))
+        if SOURCES[source]["domain"].replace("www.", "") not in urlparse(url).netloc.replace("www.", ""):
+            continue
+        block = a
+        for _ in range(3):
+            if block.parent: block = block.parent
+        text = re.sub(r"\s+", " ", block.get_text(" ", strip=True))[:1200]
+        title = re.sub(r"\s+", " ", a.get_text(" ", strip=True))[:180]
+        if not title or len(title) < 4: title = text[:120]
+        if criteria_match(s, title, text, url, source):
+            out.append(make_listing(s, source, title, url, text))
+    return dedupe(out)
+
+def parse_reader_links(source, text, target_url, s):
+    candidates = parse_markdown_links(text)
+    # Reader sometimes omits full listing links and returns text of a list. For direct Arabam/Otoplus pages, capture rows.
+    out = []
+    for c in candidates:
+        if SOURCES[source]["domain"].replace("www.", "") not in urlparse(c["url"]).netloc.replace("www.", ""):
+            continue
+        if criteria_match(s, c["title"], c["text"], c["url"], source):
+            out.append(make_listing(s, source, c["title"], c["url"], c["text"]))
+    # If reader page itself is an individual listing
+    if criteria_match(s, search_terms(s), text[:2000], target_url, source):
+        out.append(make_listing(s, source, search_terms(s), target_url, text[:2500]))
+    return dedupe(out)
+
+def make_listing(s, source, title, url, text):
+    title = clean_title(title, s)
+    price = parse_price(text) or parse_price(title)
+    year = parse_year(text) or parse_year(title)
+    km = parse_km(text) or parse_km(title)
+    city = detect_city(text) or (s.get("city") if s.get("city") != "Tüm Türkiye" else "")
+    return {"source": source, "source_label": SOURCES[source]["label"], "title": title, "url": url, "price": price, "year": year, "km": km, "city": city, "key": listing_key(source, url)}
+
+def clean_title(title, s):
+    t = re.sub(r"\s+", " ", (title or "")).strip(" -|•")
+    bad = ["filtrele", "arama", "sonuç", "listeleniyor", "tüm araç", "favori", "karşılaştır"]
+    if not t or any(b in norm(t) for b in bad) or len(t) < 6:
+        return search_terms(s)
+    return t[:180]
+
+def detect_city(text):
+    n = norm(text)
+    for c in CITIES:
+        if c == "Tüm Türkiye": continue
+        if norm(c) in n: return c
+    return ""
+
+def dedupe(items):
+    seen = set(); out=[]
+    for it in items:
+        k = it.get("key") or listing_key(it.get("source"), it.get("url"))
+        if k in seen: continue
+        seen.add(k); out.append(it)
+    return out
+
+def build_search_query(source, s):
+    domain = SOURCES[source]["domain"]
+    qparts = [f"site:{domain}", s.get("brand"), s.get("model")]
+    if s.get("variant") and s.get("variant") != "Farketmez": qparts.append('"' + s.get("variant") + '"')
+    qparts.append("ikinci el")
+    if s.get("city") and s.get("city") != "Tüm Türkiye": qparts.append(s.get("city"))
+    if s.get("min_year"): qparts.append(str(s.get("min_year")))
+    if s.get("max_price"): qparts.append(str(s.get("max_price")) + " TL")
+    return " ".join([str(x) for x in qparts if x])
+
+def scrape_source(source, s):
+    status = []
+    results = []
+    open_url = source_open_url(source, s)
+    # Direct only for sources that return HTML without login sometimes.
+    code, html, final_url = safe_get(open_url)
+    status.append(f"HTTP {code}")
+    if code == 200 and html and "<!doctype" in html.lower() or "<html" in html.lower():
+        try:
+            direct = parse_html_links(source, html, final_url, s)
+            if direct:
+                status.append(f"html {len(direct)}")
+                results.extend(direct[:MAX_RESULTS_PER_SOURCE])
+            else:
+                status.append("html liste yok")
+        except Exception as e:
+            status.append("html hata " + type(e).__name__)
+    elif code in (403, 429, 401):
+        status.append("doğrudan engel")
+    # Reader on open URL, but not Facebook/Letgo because app pages mostly useless.
+    if source not in ("facebook", "letgo") and len(results) < 3:
+        rcode, rtext = reader_get(open_url)
+        status.append(f"reader {rcode}")
+        if rcode == 200:
+            reader_results = parse_reader_links(source, rtext, open_url, s)
+            if reader_results:
+                status.append(f"reader liste {len(reader_results)}")
+                results.extend(reader_results[:MAX_RESULTS_PER_SOURCE])
+    # Jina Search fallback. It returns indexed results and usually gives individual listing links if they exist.
+    if len(results) < 8:
+        scode, links = search_jina(build_search_query(source, s))
+        status.append(f"arama {scode}")
+        found = []
+        for c in links:
+            net = urlparse(c["url"]).netloc.replace("www.", "")
+            if SOURCES[source]["domain"].replace("www.", "") not in net:
+                continue
+            if criteria_match(s, c["title"], c.get("text", ""), c["url"], source):
+                found.append(make_listing(s, source, c["title"], c["url"], c.get("text", "")))
+        status.append(f"arama liste {len(found)}")
+        results.extend(found[:MAX_RESULTS_PER_SOURCE])
+    return dedupe(results)[:MAX_RESULTS_PER_SOURCE], " / ".join(status)
+
+def save_results(search_id, results):
+    new_count = 0; drop_count = 0
+    with db() as con:
+        for it in results:
+            existing = con.execute("SELECT * FROM listings WHERE search_id=? AND listing_key=?", (search_id, it["key"])).fetchone()
+            if not existing:
+                con.execute("""INSERT INTO listings(search_id, listing_key, source, title, url, price, old_price, year, km, city, first_seen, last_seen)
+                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (search_id, it["key"], it["source"], it["title"], it["url"], it["price"], None, it["year"], it["km"], it["city"], now_iso(), now_iso()))
+                con.execute("""INSERT INTO events(search_id,event_type,source,title,url,price,old_price,created_at) VALUES(?,?,?,?,?,?,?,?)""", (search_id, "new", it["source"], it["title"], it["url"], it["price"], None, now_iso()))
+                new_count += 1
+            else:
+                old_price = existing["price"]
+                price = it["price"] or old_price
+                if old_price and it["price"] and it["price"] < old_price:
+                    con.execute("""INSERT INTO events(search_id,event_type,source,title,url,price,old_price,created_at) VALUES(?,?,?,?,?,?,?,?)""", (search_id, "price_drop", it["source"], it["title"], it["url"], it["price"], old_price, now_iso()))
+                    drop_count += 1
+                con.execute("""UPDATE listings SET title=?, url=?, price=?, old_price=?, year=?, km=?, city=?, last_seen=? WHERE id=?""", (it["title"], it["url"], price, old_price, it["year"], it["km"], it["city"], now_iso(), existing["id"]))
+    return new_count, drop_count
+
+def run_search(search_id):
+    with db() as con:
+        row = con.execute("SELECT * FROM searches WHERE id=?", (search_id,)).fetchone()
+    if not row: return
+    s = row_to_dict(row)
+    statuses = []
+    all_results = []
+    for src in s.get("sources", []):
+        if src not in SOURCES: continue
+        try:
+            res, st = scrape_source(src, s)
+            statuses.append(f"{SOURCES[src]['label']}: {st} / liste {len(res)}")
+            all_results.extend(res)
+        except Exception as e:
+            statuses.append(f"{SOURCES[src]['label']}: hata {type(e).__name__}")
+    all_results = dedupe(all_results)
+    new_count, drop_count = save_results(search_id, all_results)
+    with db() as con:
+        count = con.execute("SELECT COUNT(*) c FROM listings WHERE search_id=?", (search_id,)).fetchone()["c"]
+        con.execute("UPDATE searches SET last_checked=?, last_status=?, found_count=? WHERE id=?", (now_iso(), f"Kontrol tamamlandı. Görülen {len(all_results)}, yeni {new_count}, fiyat düşen {drop_count} | " + " ; ".join(statuses), count, search_id))
+    try:
+        send_pending_events(search_id)
+    except Exception:
+        pass
+
+def run_search_async(search_id):
+    t = threading.Thread(target=run_search, args=(search_id,), daemon=True)
     t.start()
 
-# ------------------------- Flask routes -------------------------
+def send_pending_events(search_id):
+    with db() as con:
+        s = con.execute("SELECT * FROM searches WHERE id=?", (search_id,)).fetchone()
+        events = con.execute("SELECT * FROM events WHERE search_id=? AND sent=0 ORDER BY id DESC LIMIT 20", (search_id,)).fetchall()
+    if not s or not events:
+        return
+    for ev in events:
+        if ev["event_type"] == "price_drop":
+            msg = f"📉 Fiyat düştü\n{ev['title']}\n{SOURCES.get(ev['source'],{}).get('label',ev['source'])}\nEski: {money(ev['old_price'])}\nYeni: {money(ev['price'])}\n{ev['url']}"
+        else:
+            msg = f"🚗 Yeni ilan\n{ev['title']}\n{SOURCES.get(ev['source'],{}).get('label',ev['source'])}\nFiyat: {money(ev['price'])}\n{ev['url']}"
+        email_to = (s["email"] or os.environ.get("DEFAULT_NOTIFY_EMAIL") or os.environ.get("NOTIFY_EMAIL") or "").strip()
+        telegram_to = (s["telegram_chat_id"] or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+        sent_any = False
+        if telegram_to:
+            ok, _detail = send_telegram(msg, telegram_to)
+            sent_any = ok or sent_any
+        if email_to:
+            ok, _detail = send_email(email_to, "Araç Avcısı bildirimi", msg)
+            sent_any = ok or sent_any
+        if sent_any:
+            with db() as con:
+                con.execute("UPDATE events SET sent=1 WHERE id=?", (ev["id"],))
 
-@app.route("/")
+
+def notification_config_status():
+    return {
+        "telegram_token": bool(os.environ.get("TELEGRAM_BOT_TOKEN")),
+        "telegram_chat_id_env": bool(os.environ.get("TELEGRAM_CHAT_ID")),
+        "smtp_host": bool(os.environ.get("SMTP_HOST")),
+        "smtp_user": bool(os.environ.get("SMTP_USER")),
+        "smtp_pass": bool(os.environ.get("SMTP_PASS")),
+        "mail_from": bool(os.environ.get("MAIL_FROM")),
+        "default_notify_email": bool(os.environ.get("DEFAULT_NOTIFY_EMAIL") or os.environ.get("NOTIFY_EMAIL")),
+    }
+
+
+def send_telegram(text, chat_id):
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = (chat_id or "").strip()
+    if not token:
+        return False, "TELEGRAM_BOT_TOKEN eksik"
+    if not chat_id:
+        return False, "TELEGRAM_CHAT_ID eksik"
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": False},
+            timeout=20,
+        )
+        if r.status_code == 200:
+            return True, "Telegram gönderildi"
+        return False, f"Telegram hata HTTP {r.status_code}: {r.text[:250]}"
+    except Exception as e:
+        return False, f"Telegram bağlantı hatası: {type(e).__name__}: {e}"
+
+
+def send_email(to_addr, subject, body):
+    import smtplib
+    from email.message import EmailMessage
+    host = (os.environ.get("SMTP_HOST") or "").strip()
+    user = (os.environ.get("SMTP_USER") or "").strip()
+    pw = (os.environ.get("SMTP_PASS") or "").strip()
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    to_addr = (to_addr or "").strip()
+    if not to_addr:
+        return False, "Mail alıcısı yok"
+    if not host:
+        return False, "SMTP_HOST eksik"
+    if not user:
+        return False, "SMTP_USER eksik"
+    if not pw:
+        return False, "SMTP_PASS eksik"
+    msg = EmailMessage()
+    msg["From"] = os.environ.get("MAIL_FROM", user)
+    msg["To"] = to_addr
+    msg["Subject"] = subject
+    msg.set_content(body)
+    try:
+        with smtplib.SMTP(host, port, timeout=25) as s:
+            s.starttls()
+            s.login(user, pw)
+            s.send_message(msg)
+        return True, "Mail gönderildi"
+    except Exception as e:
+        return False, f"Mail gönderim hatası: {type(e).__name__}: {e}"
+
+
+@APP.route("/")
 def index():
     return render_template("index.html", version=VERSION)
 
-@app.route("/reset-cache")
-def reset_cache():
-    return render_template("reset_cache.html", version=VERSION)
-
-@app.route("/health")
+@APP.route("/health")
 def health():
-    return jsonify(ok=True, version=VERSION, time=now_iso(), default_interval_hours=DEFAULT_INTERVAL_HOURS, scheduler_tick_minutes=SCHEDULER_TICK_MINUTES, db=os.path.basename(DB_PATH))
+    return jsonify(ok=True, version=VERSION, time=now_iso(), data_dir=str(DATA_DIR), db_exists=DB_PATH.exists(), notifications=notification_config_status())
 
-@app.route("/api/options")
-def api_options():
-    return jsonify({
-        "ok": True,
-        "version": VERSION,
-        "brands": BRANDS,
-        "cities": CITIES,
-        "sources": [s.__dict__ for s in SOURCES],
-        "intervals": INTERVALS,
-        "fuels": FUELS,
-        "transmissions": TRANSMISSIONS,
-    })
+@APP.route("/reset-cache")
+def reset_cache():
+    return render_template("reset_cache.html")
 
-@app.route("/api/watches", methods=["GET"])
-def api_watches():
+@APP.route("/reset-db")
+def reset_db():
+    key = request.args.get("key")
+    if key != os.environ.get("RESET_KEY", "temizle"):
+        return jsonify(ok=False, error="RESET_KEY yanlış. Render Environment içine RESET_KEY ekle veya ?key=temizle kullan."), 403
+    try:
+        if DB_PATH.exists(): DB_PATH.unlink()
+        init_db()
+        return jsonify(ok=True, message="Veritabanı sıfırlandı", version=VERSION)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+
+@APP.route("/api/notifications/status")
+def api_notification_status():
+    return jsonify(ok=True, version=VERSION, config=notification_config_status())
+
+
+@APP.route("/api/notifications/test", methods=["POST"])
+def api_notification_test():
+    data = request.get_json(silent=True) or {}
+    email_to = (data.get("email") or os.environ.get("DEFAULT_NOTIFY_EMAIL") or os.environ.get("NOTIFY_EMAIL") or "").strip()
+    telegram_to = (data.get("telegram_chat_id") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    msg = "✅ Araç Avcısı test bildirimi\nBildirim bağlantısı çalışıyor. Bundan sonra yeni ilan ve fiyat düşüşü olursa linkli bildirim gönderilir."
+    results = []
+    ok_any = False
+    if telegram_to or os.environ.get("TELEGRAM_BOT_TOKEN"):
+        ok, detail = send_telegram(msg, telegram_to)
+        results.append({"channel": "telegram", "ok": ok, "detail": detail})
+        ok_any = ok_any or ok
+    else:
+        results.append({"channel": "telegram", "ok": False, "detail": "Telegram bilgisi yok: TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID gerekli"})
+    if email_to or os.environ.get("SMTP_HOST") or os.environ.get("SMTP_USER"):
+        ok, detail = send_email(email_to, "Araç Avcısı test bildirimi", msg)
+        results.append({"channel": "mail", "ok": ok, "detail": detail})
+        ok_any = ok_any or ok
+    else:
+        results.append({"channel": "mail", "ok": False, "detail": "Mail bilgisi yok: SMTP_HOST, SMTP_USER, SMTP_PASS ve alıcı mail gerekli"})
+    return jsonify(ok=ok_any, results=results, config=notification_config_status())
+
+
+@APP.route("/api/searches/<int:sid>/notify-test", methods=["POST"])
+def api_search_notify_test(sid):
     with db() as con:
-        rows = con.execute("SELECT * FROM watches ORDER BY id DESC").fetchall()
-        watches = []
-        for r in rows:
-            w = row_to_watch(r)
-            w["items_count"] = con.execute("SELECT COUNT(*) FROM items WHERE watch_id=? AND is_active=1", (w["id"],)).fetchone()[0]
-            watches.append(w)
-        events = [dict(x) for x in con.execute("SELECT * FROM events ORDER BY id DESC LIMIT 20").fetchall()]
-    return jsonify(ok=True, watches=watches, events=events)
+        s = con.execute("SELECT * FROM searches WHERE id=?", (sid,)).fetchone()
+    if not s:
+        return jsonify(ok=False, error="Takip bulunamadı"), 404
+    s = row_to_dict(s)
+    msg = f"✅ Araç Avcısı takip test bildirimi\n{s.get('name')}\nBu takip için bildirim çalışıyor. Yeni ilan veya fiyat düşüşü yakalanırsa ilan linkiyle gönderilecek."
+    email_to = (s.get("email") or os.environ.get("DEFAULT_NOTIFY_EMAIL") or os.environ.get("NOTIFY_EMAIL") or "").strip()
+    telegram_to = (s.get("telegram_chat_id") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    results = []
+    ok_any = False
+    ok, detail = send_telegram(msg, telegram_to)
+    results.append({"channel": "telegram", "ok": ok, "detail": detail})
+    ok_any = ok_any or ok
+    ok, detail = send_email(email_to, "Araç Avcısı takip test bildirimi", msg)
+    results.append({"channel": "mail", "ok": ok, "detail": detail})
+    ok_any = ok_any or ok
+    return jsonify(ok=ok_any, results=results, config=notification_config_status())
+
+@APP.route("/api/options")
+def api_options():
+    return jsonify(sources=SOURCES, vehicles=VEHICLE_DATA, cities=CITIES, fuels=FUELS, transmissions=TRANSMISSIONS, version=VERSION)
+
+@APP.route("/api/searches", methods=["GET", "POST"])
+def api_searches():
+    if request.method == "POST":
+        data = request.get_json(force=True)
+        brand = (data.get("brand_custom") or data.get("brand") or "").strip()
+        model = (data.get("model_custom") or data.get("model") or "").strip()
+        variant = (data.get("variant_custom") or data.get("variant") or "Farketmez").strip() or "Farketmez"
+        name = (data.get("name") or f"{brand} {model} {'' if variant=='Farketmez' else variant}").strip()
+        sources = data.get("sources") or list(SOURCES.keys())
+        if not brand or not model:
+            return jsonify(ok=False, error="Marka ve model zorunlu"), 400
+        with db() as con:
+            cur = con.execute("""INSERT INTO searches(name, brand, model, variant, city, min_year, max_year, max_km, min_price, max_price, fuel, transmission, sources, interval_hours, active, email, telegram_chat_id, created_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (name, brand, model, variant, data.get("city") or "Tüm Türkiye", int_only(data.get("min_year")), int_only(data.get("max_year")), int_only(data.get("max_km")), int_only(data.get("min_price")), int_only(data.get("max_price")), data.get("fuel") or "Farketmez", data.get("transmission") or "Farketmez", json.dumps(sources, ensure_ascii=False), int_only(data.get("interval_hours")) or 4, 1, data.get("email") or "", data.get("telegram_chat_id") or "", now_iso()))
+            sid = cur.lastrowid
+            con.execute("UPDATE searches SET last_status=? WHERE id=?", ("Takip kaydedildi. İlk kontrol arka planda başladı.", sid))
+        run_search_async(sid)
+        return jsonify(ok=True, id=sid, message="Takip kaydedildi. İlk kontrol arka planda başladı.")
+    with db() as con:
+        rows = con.execute("SELECT * FROM searches ORDER BY id DESC").fetchall()
+    data = []
+    for r in rows:
+        d = row_to_dict(r)
+        d["open_urls"] = {src: source_open_url(src, d) for src in d.get("sources", []) if src in SOURCES}
+        data.append(d)
+    return jsonify(ok=True, searches=data)
+
+@APP.route("/api/searches/<int:sid>/run", methods=["POST"])
+def api_run(sid):
+    run_search(sid)
+    return jsonify(ok=True)
+
+@APP.route("/api/searches/<int:sid>/toggle", methods=["POST"])
+def api_toggle(sid):
+    with db() as con:
+        row = con.execute("SELECT active FROM searches WHERE id=?", (sid,)).fetchone()
+        if not row: return jsonify(ok=False), 404
+        con.execute("UPDATE searches SET active=? WHERE id=?", (0 if row["active"] else 1, sid))
+    return jsonify(ok=True)
+
+@APP.route("/api/searches/<int:sid>/interval", methods=["POST"])
+def api_interval(sid):
+    hours = int_only((request.get_json(force=True) or {}).get("interval_hours")) or 4
+    with db() as con:
+        con.execute("UPDATE searches SET interval_hours=? WHERE id=?", (hours, sid))
+    return jsonify(ok=True)
+
+@APP.route("/api/searches/<int:sid>", methods=["DELETE"])
+def api_delete(sid):
+    with db() as con:
+        con.execute("DELETE FROM listings WHERE search_id=?", (sid,))
+        con.execute("DELETE FROM events WHERE search_id=?", (sid,))
+        con.execute("DELETE FROM searches WHERE id=?", (sid,))
+    return jsonify(ok=True)
+
+@APP.route("/api/searches/<int:sid>/results")
+def api_results(sid):
+    with db() as con:
+        rows = con.execute("SELECT * FROM listings WHERE search_id=? ORDER BY COALESCE(price, 999999999), last_seen DESC", (sid,)).fetchall()
+    return jsonify(ok=True, results=[dict(r, price_text=money(r["price"]), km_text=km_text(r["km"]), source_label=SOURCES.get(r["source"], {}).get("label", r["source"])) for r in rows])
+
+@APP.route("/api/events")
+def api_events():
+    with db() as con:
+        rows = con.execute("SELECT * FROM events ORDER BY id DESC LIMIT 50").fetchall()
+    return jsonify(ok=True, events=[dict(r, price_text=money(r["price"]), old_price_text=money(r["old_price"]), source_label=SOURCES.get(r["source"], {}).get("label", r["source"])) for r in rows])
 
 
-def normalize_payload(data: Dict) -> Dict:
-    def intval(k):
-        v = data.get(k)
-        if v in (None, "", "None"):
-            return None
-        try: return int(str(v).replace(".", "").replace(",", ""))
-        except Exception: return None
-    brand = data.get("brand") or "Volkswagen"
-    model = data.get("model") or "Tiguan"
-    pkg = data.get("package") or "Farketmez"
-    name = clean_text(data.get("name") or f"{brand} {model} {pkg if pkg != 'Farketmez' else ''}")
-    sources = data.get("sources") or [s.key for s in SOURCES]
-    if isinstance(sources, str):
-        try: sources = json.loads(sources)
-        except Exception: sources = [x.strip() for x in sources.split(",") if x.strip()]
-    sources = [s for s in sources if s in SOURCE_MAP]
-    if not sources:
-        sources = [s.key for s in SOURCES]
-    interval = intval("interval_hours") or DEFAULT_INTERVAL_HOURS
-    if interval not in INTERVALS:
-        interval = DEFAULT_INTERVAL_HOURS
-    return {
-        "name": name, "brand": brand, "model": model, "package": pkg,
-        "city": data.get("city") or "Tüm Türkiye", "min_year": intval("min_year"), "max_year": intval("max_year"),
-        "max_km": intval("max_km"), "min_price": intval("min_price"), "max_price": intval("max_price"),
-        "fuel": data.get("fuel") or "Farketmez", "transmission": data.get("transmission") or "Farketmez",
-        "sources": sources, "interval_hours": interval,
-        "email": clean_text(data.get("email") or ""), "telegram_chat_id": clean_text(data.get("telegram_chat_id") or ""),
-    }
-
-@app.route("/api/watches", methods=["POST"])
-def api_create_watch():
-    data = request.get_json(force=True, silent=True) or {}
-    w = normalize_payload(data)
-    now = now_iso()
+def scheduler_tick():
     try:
         with db() as con:
-            # don't duplicate exact same active watch; return existing
-            existing = con.execute("""
-                SELECT id FROM watches WHERE active=1 AND brand=? AND model=? AND package=? AND city=? AND min_year IS ? AND max_year IS ? AND max_km IS ? AND min_price IS ? AND max_price IS ? AND transmission=?
-                ORDER BY id DESC LIMIT 1
-            """, (w["brand"], w["model"], w["package"], w["city"], w["min_year"], w["max_year"], w["max_km"], w["min_price"], w["max_price"], w["transmission"])).fetchone()
-            if existing:
-                wid = int(existing["id"])
-            else:
-                con.execute("""
-                    INSERT INTO watches(name,brand,model,package,city,min_year,max_year,max_km,min_price,max_price,fuel,transmission,sources,interval_hours,active,email,telegram_chat_id,created_at,updated_at,last_status,next_check_at,checking)
-                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)
-                """, (w["name"], w["brand"], w["model"], w["package"], w["city"], w["min_year"], w["max_year"], w["max_km"], w["min_price"], w["max_price"], w["fuel"], w["transmission"], json.dumps(w["sources"]), w["interval_hours"], 1, w["email"], w["telegram_chat_id"], now, now, "Takip kaydedildi. Başlangıç araması arkada çalışıyor.", now))
-                wid = con.execute("SELECT last_insert_rowid()").fetchone()[0]
-            con.commit()
-        start_check_thread(wid)
-        return jsonify(ok=True, id=wid, message="Takip kaydedildi. Başlangıç araması arkada çalışıyor.")
-    except Exception as e:
-        return jsonify(ok=False, error=f"Kayıt hatası: {type(e).__name__}: {e}"), 500
-
-@app.route("/api/watches/<int:watch_id>/check", methods=["POST"])
-def api_check(watch_id):
-    if not get_watch(watch_id):
-        return jsonify(ok=False, error="Takip bulunamadı"), 404
-    start_check_thread(watch_id)
-    return jsonify(ok=True, message="Kontrol başlatıldı")
-
-@app.route("/api/watches/<int:watch_id>/items")
-def api_items(watch_id):
-    with db() as con:
-        rows = con.execute("SELECT * FROM items WHERE watch_id=? AND is_active=1 ORDER BY price IS NULL, price ASC, id DESC LIMIT 100", (watch_id,)).fetchall()
-    return jsonify(ok=True, items=[dict(r) for r in rows])
-
-@app.route("/api/watches/<int:watch_id>/toggle", methods=["POST"])
-def api_toggle(watch_id):
-    with db() as con:
-        r = con.execute("SELECT active FROM watches WHERE id=?", (watch_id,)).fetchone()
-        if not r: return jsonify(ok=False, error="Takip bulunamadı"), 404
-        newv = 0 if r["active"] else 1
-        con.execute("UPDATE watches SET active=?, updated_at=? WHERE id=?", (newv, now_iso(), watch_id))
-        con.commit()
-    return jsonify(ok=True, active=newv)
-
-@app.route("/api/watches/<int:watch_id>/interval", methods=["POST"])
-def api_interval(watch_id):
-    data = request.get_json(force=True, silent=True) or {}
-    try: interval = int(data.get("interval_hours"))
-    except Exception: interval = DEFAULT_INTERVAL_HOURS
-    if interval not in INTERVALS:
-        return jsonify(ok=False, error="Geçersiz süre"), 400
-    next_time = (datetime.now(timezone.utc) + timedelta(hours=interval)).replace(microsecond=0).isoformat()
-    with db() as con:
-        con.execute("UPDATE watches SET interval_hours=?, next_check_at=?, updated_at=? WHERE id=?", (interval, next_time, now_iso(), watch_id))
-        con.commit()
-    return jsonify(ok=True, interval_hours=interval)
-
-@app.route("/api/watches/<int:watch_id>", methods=["DELETE"])
-def api_delete(watch_id):
-    with db() as con:
-        con.execute("DELETE FROM events WHERE watch_id=?", (watch_id,))
-        con.execute("DELETE FROM items WHERE watch_id=?", (watch_id,))
-        con.execute("DELETE FROM watches WHERE id=?", (watch_id,))
-        con.commit()
-    return jsonify(ok=True)
-
-@app.route("/api/debug/clear-items", methods=["POST"])
-def api_clear_items():
-    data = request.get_json(force=True, silent=True) or {}
-    wid = data.get("watch_id")
-    with db() as con:
-        if wid:
-            con.execute("DELETE FROM items WHERE watch_id=?", (int(wid),))
-        else:
-            con.execute("DELETE FROM items")
-        con.commit()
-    return jsonify(ok=True)
-
-@app.route("/api/watches/<int:watch_id>/open/<source_key>")
-def api_open_source(watch_id, source_key):
-    w = get_watch(watch_id)
-    if not w or source_key not in SOURCE_MAP:
-        return redirect("/")
-    return redirect(direct_url(source_key, w), code=302)
-
-def boot_init_db():
-    """Eski/veri klasöründen gelen bozuk SQLite şemasında uygulama çökmesin."""
-    try:
-        init_db()
+            rows = con.execute("SELECT * FROM searches WHERE active=1").fetchall()
+        for r in rows:
+            d = row_to_dict(r)
+            last = d.get("last_checked")
+            interval = int(d.get("interval_hours") or 4)
+            due = True
+            if last:
+                try:
+                    due = datetime.fromisoformat(last) + timedelta(hours=interval) <= datetime.now(timezone.utc)
+                except Exception:
+                    due = True
+            if due:
+                run_search_async(d["id"])
     except Exception:
-        traceback.print_exc()
-        try:
-            if os.path.exists(DB_PATH):
-                backup = DB_PATH + ".bozuk_yedek_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-                os.replace(DB_PATH, backup)
-        except Exception:
-            traceback.print_exc()
-        # Yeni, temiz veritabanı oluştur.
-        init_db()
+        pass
 
-# Init once on import
-boot_init_db()
-start_scheduler_once()
+init_db()
+try:
+    scheduler = BackgroundScheduler(daemon=True)
+    scheduler.add_job(scheduler_tick, "interval", minutes=int(os.environ.get("SCHEDULER_TICK_MINUTES", "15")))
+    scheduler.start()
+except Exception:
+    pass
 
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", "5050"))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    APP.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5050")), debug=False)
+# Compatibility for old Render commands using app:app
+app = APP

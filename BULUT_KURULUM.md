@@ -1,42 +1,64 @@
-# Bulut Kurulum
+# Render Kurulum
 
-## GitHub
+1. GitHub reposundaki eski dosyaları mümkünse temizle.
+2. Bu paketin içindeki dosyaları repo köküne yükle:
+   - app.py
+   - templates
+   - static
+   - requirements.txt
+   - render.yaml
+   - Procfile
+   - Dockerfile
+   - README.md
+3. Render > Manual Deploy > Clear build cache & deploy.
+4. Deploy bitince `/health` aç.
+5. Telefon için önce `/reset-cache` aç, sonra ana ekrana tekrar ekle.
 
-ZIP içindeki dosyaları repo ana dizinine yükle. `app.py`, `requirements.txt`, `templates`, `static` repo kökünde görünmeli.
-
-## Render Web Service
-
-- Runtime: Python
-- Build Command: `pip install -r requirements.txt`
-- Start Command: `gunicorn --workers 1 --threads 4 --timeout 180 --bind 0.0.0.0:$PORT app:app`
-- Health Check Path: `/health`
-
-## Environment
-
-Free test için:
-
-```text
-DATA_DIR=data
-CHECK_INTERVAL_HOURS=4
-ENABLE_SCHEDULER=1
-SCHEDULER_TICK_MINUTES=15
-SECRET_KEY=uzun-bir-sifre
-```
-
-Kalıcı kullanım için paid disk eklersen:
+## Eski verileri silmek için
+Tarayıcıdan aç:
 
 ```text
-DATA_DIR=/data
+https://SENIN-RENDER-LINKIN.onrender.com/reset-db?key=temizle
 ```
 
-ve Render disk mount path `/data` olmalı.
-
-## Kontrol
-
-Deploy bitince:
+## Telegram
+Render Environment içine:
 
 ```text
-/health
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
 ```
 
-sonucunda sürüm `v21-sifirdan-stabil-jina-destekli` olmalı.
+## Mail
+Render Environment içine:
+
+```text
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=mail_adresin
+SMTP_PASS=gmail_uygulama_sifren
+MAIL_FROM=mail_adresin
+```
+
+
+## Bildirim ayarları
+
+Telegram için Render Environment içine şunları ekle:
+
+```text
+TELEGRAM_BOT_TOKEN=BotFather tokeni
+TELEGRAM_CHAT_ID=senin chat id
+```
+
+Mail için Gmail uygulama şifresiyle şunları ekle:
+
+```text
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=mail_adresin@gmail.com
+SMTP_PASS=gmail_uygulama_sifren
+MAIL_FROM=mail_adresin@gmail.com
+DEFAULT_NOTIFY_EMAIL=bildirim_alacak_mail
+```
+
+Uygulamada önce **Bildirim testi** bölümünden test gönder. Test geçmeden yeni ilan bildirimi bekleme.

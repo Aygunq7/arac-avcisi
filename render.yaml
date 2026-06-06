@@ -4,16 +4,13 @@ services:
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --workers 1 --threads 4 --timeout 180 --bind 0.0.0.0:$PORT app:app
-    healthCheckPath: /health
+    startCommand: gunicorn --workers 1 --threads 4 --timeout 180 --bind 0.0.0.0:$PORT app:APP
     envVars:
       - key: DATA_DIR
         value: data
-      - key: CHECK_INTERVAL_HOURS
-        value: "4"
-      - key: ENABLE_SCHEDULER
-        value: "1"
-      - key: SCHEDULER_TICK_MINUTES
-        value: "15"
       - key: SECRET_KEY
         generateValue: true
+      - key: RESET_KEY
+        value: temizle
+      - key: SCHEDULER_TICK_MINUTES
+        value: 15

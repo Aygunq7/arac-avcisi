@@ -3,110 +3,89 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#07111f">
+  <meta name="theme-color" content="#071120">
   <title>Araç Avcısı</title>
-  <link rel="stylesheet" href="/static/app.css?v=21">
+  <link rel="manifest" href="/static/manifest.json?v=24">
+  <link rel="stylesheet" href="/static/app.css?v=24">
 </head>
 <body>
   <main class="wrap">
-    <section class="hero">
+    <header class="hero">
       <div>
-        <div class="eyebrow">Mobil ikinci el araç takip paneli</div>
+        <div class="eyebrow">MOBİL İKİNCİ EL ARAÇ TAKİP PANELİ</div>
         <h1>Araç Avcısı</h1>
-        <p class="sub">Sıfırdan yazılmış stabil sürüm. Önce takibi kaydeder, sonra aramayı arkada çalıştırır. Sahte ilan üretmez; sadece gerçekten yakaladığı ilanları listeler.</p>
+        <p>Bildirim testi eklenmiş stabil sürüm. Telegram/mail ayarı eksikse ekranda sebebini gösterir; yeni ilan ve fiyat düşüşlerinde ilan linki gönderir.</p>
       </div>
-      <div class="badge">{{ version }} aktif</div>
-    </section>
-
-    <section class="card form-card">
-      <h2>Yeni takip oluştur</h2>
-      <form id="watchForm">
-        <div class="grid two">
-          <label>Arama adı
-            <input id="name" name="name" placeholder="Örn: Tiguan Comfortline" autocomplete="off">
-          </label>
-          <label>Şehir
-            <select id="city" name="city"></select>
-          </label>
-        </div>
-
-        <div class="grid three">
-          <label>Marka
-            <select id="brand" name="brand"></select>
-          </label>
-          <label>Model
-            <select id="model" name="model"></select>
-          </label>
-          <label>Paket / Motor
-            <select id="package" name="package"></select>
-          </label>
-        </div>
-
-        <div class="grid three">
-          <label>En düşük yıl
-            <input id="min_year" name="min_year" type="number" inputmode="numeric" placeholder="2016">
-          </label>
-          <label>En yüksek yıl
-            <input id="max_year" name="max_year" type="number" inputmode="numeric" placeholder="2026">
-          </label>
-          <label>Max km
-            <input id="max_km" name="max_km" type="number" inputmode="numeric" placeholder="110000">
-          </label>
-        </div>
-
-        <div class="grid two">
-          <label>Min fiyat
-            <input id="min_price" name="min_price" type="number" inputmode="numeric" placeholder="1000000">
-          </label>
-          <label>Max fiyat
-            <input id="max_price" name="max_price" type="number" inputmode="numeric" placeholder="1750000">
-          </label>
-        </div>
-
-        <div class="grid two">
-          <label>Yakıt
-            <select id="fuel" name="fuel"></select>
-          </label>
-          <label>Vites
-            <select id="transmission" name="transmission"></select>
-          </label>
-        </div>
-
-        <h3>Siteleri seç</h3>
-        <div id="sources" class="source-box"></div>
-
-        <div class="grid two">
-          <label>Kaç saatte bir kontrol edilsin?
-            <select id="interval_hours" name="interval_hours"></select>
-          </label>
-          <label>Mail adresi
-            <input id="email" name="email" type="email" placeholder="ornek@mail.com" autocomplete="email">
-          </label>
-        </div>
-        <label>Telegram Chat ID
-          <input id="telegram_chat_id" name="telegram_chat_id" placeholder="Boş kalırsa Render .env kullanılır">
-        </label>
-
-        <button class="primary" type="submit" id="submitBtn">Takibi başlat</button>
-        <p class="hint">İlk aramada bulunan ilanlar başlangıç listesi olur. Bundan sonra yeni ilan ve fiyat düşüşü olursa bildirim üretilir.</p>
-      </form>
-    </section>
+      <div class="badge">{{ version }}</div>
+    </header>
 
     <section class="card">
-      <div class="section-head">
-        <h2>Kayıtlı takipler</h2>
-        <button class="secondary" id="refreshBtn">Yenile</button>
+      <h2>Yeni takip oluştur</h2>
+      <div class="grid two">
+        <label>Arama adı<input id="name" placeholder="Örn: Tiguan Comfortline"></label>
+        <label>Şehir<select id="city"></select></label>
       </div>
-      <div id="watchList" class="watch-list"></div>
+      <div class="grid three">
+        <label>Marka<select id="brand"></select></label>
+        <label>Model<select id="model"></select></label>
+        <label>Paket / Motor<select id="variant"></select></label>
+      </div>
+      <details class="manual"><summary>Listede yoksa özel marka / model / paket yaz</summary>
+        <div class="grid three">
+          <label>Özel marka<input id="brand_custom" placeholder="Örn: Jeep"></label>
+          <label>Özel model<input id="model_custom" placeholder="Örn: Compass"></label>
+          <label>Özel paket<input id="variant_custom" placeholder="Örn: 1.3 e-Hybrid Limited"></label>
+        </div>
+      </details>
+      <div class="grid three">
+        <label>En düşük yıl<input id="min_year" type="number" value="2016"></label>
+        <label>En yüksek yıl<input id="max_year" type="number" value="2026"></label>
+        <label>Max km<input id="max_km" type="number" value="110000"></label>
+      </div>
+      <div class="grid two">
+        <label>Min fiyat<input id="min_price" type="number" value="1000000"></label>
+        <label>Max fiyat<input id="max_price" type="number" value="1750000"></label>
+      </div>
+      <div class="grid two">
+        <label>Yakıt<select id="fuel"></select></label>
+        <label>Vites<select id="transmission"></select></label>
+      </div>
+      <h3>Siteleri seç</h3>
+      <div id="sources" class="chips"></div>
+      <div class="grid three">
+        <label>Kaç saatte bir kontrol edilsin?<select id="interval_hours">
+          <option value="1">1 saatte bir</option><option value="2">2 saatte bir</option><option value="4" selected>4 saatte bir</option><option value="6">6 saatte bir</option><option value="12">12 saatte bir</option><option value="24">24 saatte bir</option>
+        </select></label>
+        <label>Mail adresi<input id="email" placeholder="ornek@mail.com"></label>
+        <label>Telegram Chat ID<input id="telegram_chat_id" placeholder="Boşsa .env kullanılır"></label>
+      </div>
+      <button id="createBtn" class="primary">Takibi başlat</button>
+      <p class="note">İlk kayıt hemen oluşturulur. İlan taraması arka planda çalışır. Sitenin otomatik liste vermediği durumda uygulama yanlış/sahte ilan üretmez.</p>
+    </section>
+
+
+    <section class="card">
+      <h2>Bildirim testi</h2>
+      <p class="note">Önce buradan test bildirimi gönder. Telegram veya mail ayarında eksik varsa uygulama sebebini açıkça gösterir.</p>
+      <div class="grid two">
+        <label>Test mail adresi<input id="test_email" placeholder="ornek@mail.com"></label>
+        <label>Test Telegram Chat ID<input id="test_telegram_chat_id" placeholder="Boşsa Render TELEGRAM_CHAT_ID kullanılır"></label>
+      </div>
+      <div class="actions"><button id="testNotifyBtn">Test bildirimi gönder</button><button id="notifyStatusBtn">Bildirim ayarını kontrol et</button></div>
+      <div id="notifyStatus" class="empty">Henüz test yapılmadı.</div>
+    </section>
+    <section class="card">
+      <div class="section-head"><h2>Kayıtlı takipler</h2><button id="refreshBtn">Yenile</button></div>
+      <div id="searches"></div>
     </section>
 
     <section class="card">
       <h2>Son bildirim olayları</h2>
-      <div id="events" class="events"></div>
+      <div id="events"></div>
     </section>
   </main>
-
   <div id="toast" class="toast"></div>
-  <script src="/static/app.js?v=21"></script>
+  <script>window.APP_VERSION='{{ version }}';</script>
+  <script src="/static/app.js?v=24"></script>
 </body>
 </html>

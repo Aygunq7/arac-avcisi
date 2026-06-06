@@ -1,0 +1,5 @@
+Bu v23 sıfırdan temiz sürümdür.
+Eski data/veri/__pycache__ klasörleri yüklenmesin.
+Render'da önce Clear build cache & deploy yap.
+Gerekirse /reset-db?key=temizle ile veritabanını sıfırla.
+Telefonda /reset-cache açıp eski PWA simgesini sil ve yeniden ekle.
