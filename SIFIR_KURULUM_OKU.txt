@@ -1,0 +1,20 @@
+Bu ZIP'in icindeki dosyalar GitHub repo kok dizinine yuklenecek.
+
+GitHub ana sayfada en ustte sunlar gorunmeli:
+app.py
+requirements.txt
+render.yaml
+Procfile
+Dockerfile
+static
+templates
+
+Chrome sayfayi Turkceye cevirirse app.py 'uygulama.py', requirements.txt 'gereksinimler.txt', static 'statik', templates 'sablonlar' gibi gorunebilir. Bu sadece ekran cevirisidir.
+
+Render deploy sonrasi kontrol:
+https://arac-avcisi.onrender.com/health
+Beklenen version:
+v21-sifirdan-stabil-jina-destekli
+
+Telefon onbellek temizleme:
+https://arac-avcisi.onrender.com/reset-cache
