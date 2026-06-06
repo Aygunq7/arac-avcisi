@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, redirect, jsonify, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 
-VERSION = "v27-create-hatasi-db-migration"
+VERSION = "v28-filtreler-kesin-uygulaniyor"
 DATA_DIR = os.getenv("DATA_DIR", "data")
 DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.db")
 DEFAULT_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4") or 4)
@@ -382,27 +382,53 @@ def parse_km(text):
     return None
 
 
+
+def fuel_ok(item, t):
+    wanted = (t.get("fuel") or "Farketmez").lower()
+    if wanted == "farketmez":
+        return True
+    blob = slug_tr(" ".join(str(item.get(k) or "") for k in ["title", "url", "raw"]))
+    fuel_map = {
+        "benzin": ["benzin", "gasoline", "petrol"],
+        "dizel": ["dizel", "diesel"],
+        "lpg": ["lpg", "otogaz"],
+        "benzin & lpg": ["benzin-lpg", "benzin-ve-lpg", "lpg"],
+        "hibrit": ["hibrit", "hybrid"],
+        "elektrik": ["elektrik", "electric"]
+    }
+    keys = fuel_map.get(wanted, [wanted])
+    # Yakıt seçildiyse bilgi yoksa kabul etme. Böylece filtre gerçekten çalışır.
+    return any(slug_tr(k) in blob for k in keys)
+
+
 def gear_ok(item, t):
     wanted = (t.get("gear") or "Farketmez").lower()
     if wanted == "farketmez":
         return True
     blob = slug_tr(" ".join(str(item.get(k) or "") for k in ["title", "url", "raw"]))
-    auto_words = ["otomatik", "automatic", "dsg", "edc", "cvt", "tiptronic", "stronic", "s-tronic", "powershift", "auto"]
+    auto_words = ["otomatik", "automatic", "dsg", "edc", "cvt", "tiptronic", "stronic", "s-tronic", "powershift", "auto", "at", "bva"]
     semi_words = ["yari-otomatik", "yarı-otomatik", "semi-automatic", "dsg", "edc", "cvt"]
-    manual_words = ["manuel", "manual", "duz-vites", "düz-vites"]
+    manual_words = ["manuel", "manual", "duz-vites", "düz-vites", "duz", "mt"]
     has_manual = any(slug_tr(w) in blob for w in manual_words)
     has_auto = any(slug_tr(w) in blob for w in auto_words + semi_words)
     if "manuel" in wanted:
-        return not has_auto and (has_manual or True)
-    if "otomatik" in wanted:
-        # Manuel olduğu açıkça yazıyorsa kesin reddet. Otomatik bilgisi yoksa kabul et, çünkü çoğu listede vites metni yok.
-        return not has_manual
+        # Manuel seçildiyse otomatik kelimesi geçen ilanı reddet, manuel bilgisi yoksa da reddet.
+        return has_manual and not has_auto
     if "yar" in wanted:
-        return not has_manual
+        # Yarı otomatik seçildiyse DSG/EDC/CVT vb. açıkça görünmeli.
+        return any(slug_tr(w) in blob for w in semi_words) and not has_manual
+    if "otomatik" in wanted:
+        # Otomatik seçildiyse manuel olanları ve vites bilgisi okunamayanları reddet.
+        return has_auto and not has_manual
     return True
 
 
 def passes_filters(item, t):
+    """Kesin filtre motoru.
+    Önceki sürümlerde fiyat/yıl/km okunamazsa ilan yine listeye giriyordu. Bu yüzden kullanıcı
+    filtre çalışmıyor gibi görüyordu. Bu sürümde kullanıcı bir filtre girdiyse o bilgi ilanda
+    okunmak zorunda. Okunamayan ilan listeye alınmaz.
+    """
     blob = f"{item.get('title','')} {item.get('url','')} {item.get('raw','')}".lower()
     slug_blob = slug_tr(blob)
     brand_slug = slug_tr(t.get("brand"))
@@ -414,30 +440,50 @@ def passes_filters(item, t):
 
     trim = t.get("trim") or ""
     if trim and trim != "Farketmez":
-        # Çok katı değil ama alakasız linkleri eleyecek kadar yeterli.
         tokens = [slug_tr(x) for x in re.split(r"\s+", trim) if len(x) > 1]
-        strong = [x for x in tokens if x not in ["tsi", "tdi", "bmt", "eco", "vtec", "i"]]
-        # Comfortline/Elegance/R-Line gibi paket adı varsa metinde veya URL'de görünmeli.
-        package_tokens = [x for x in strong if not re.match(r"^\d", x)]
-        if package_tokens and not any(x in slug_blob for x in package_tokens):
+        # Motor hacmi ve paket adı da metinde/url'de görünmeli. Örn: 1.4 + tsi + comfortline.
+        required = []
+        for x in tokens:
+            if x in ["bmt", "eco", "i", "ve", "and"]:
+                continue
+            required.append(x)
+        # TSI/TDI gibi kısa motor kodlarını da kontrol et ama ilan başlığında yoksa tamamen elenmesin diye
+        # en az paket adı + model şartını güçlü tutuyoruz.
+        important = [x for x in required if not re.match(r"^\d", x)]
+        if important and not all(x in slug_blob for x in important):
             return False
 
     if not gear_ok(item, t):
         return False
+    if not fuel_ok(item, t):
+        return False
 
     price = item.get("price")
-    if price:
+    if t.get("price_min") or t.get("price_max"):
+        if not price:
+            return False
         if t.get("price_min") and price < t["price_min"]: return False
         if t.get("price_max") and price > t["price_max"]: return False
+
     year = item.get("year")
-    if year:
+    if t.get("year_min") or t.get("year_max"):
+        if not year:
+            return False
         if t.get("year_min") and year < t["year_min"]: return False
         if t.get("year_max") and year > t["year_max"]: return False
+
     km = item.get("km")
-    if km and t.get("km_max") and km > t["km_max"]:
-        return False
+    if t.get("km_max"):
+        if not km:
+            return False
+        if km > t["km_max"]:
+            return False
+
     city = t.get("city")
-    if city and city != "Tüm Türkiye" and item.get("city"):
+    if city and city != "Tüm Türkiye":
+        # Şehir filtresi seçildiyse ilan içinden şehir okunmak zorunda.
+        if not item.get("city"):
+            return False
         if slug_tr(city) not in slug_tr(item.get("city")):
             return False
     return True
