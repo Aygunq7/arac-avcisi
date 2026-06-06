@@ -17,11 +17,16 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, jsonify, render_template, request, redirect
 
-VERSION = "v21-sifirdan-stabil-jina-destekli"
+VERSION = "v22-db-temiz-baslatma"
 APP_NAME = "Araç Avcısı"
 
-DATA_DIR = os.getenv("DATA_DIR", "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+DATA_DIR = os.getenv("DATA_DIR", "data") or "data"
+try:
+    os.makedirs(DATA_DIR, exist_ok=True)
+except Exception:
+    # Render Free plan veya eski /data ayarı sorun çıkarırsa uygulama düşmesin.
+    DATA_DIR = "data"
+    os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.sqlite3")
 
 DEFAULT_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4") or 4)
@@ -1128,8 +1133,23 @@ def api_open_source(watch_id, source_key):
         return redirect("/")
     return redirect(direct_url(source_key, w), code=302)
 
+def boot_init_db():
+    """Eski/veri klasöründen gelen bozuk SQLite şemasında uygulama çökmesin."""
+    try:
+        init_db()
+    except Exception:
+        traceback.print_exc()
+        try:
+            if os.path.exists(DB_PATH):
+                backup = DB_PATH + ".bozuk_yedek_" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+                os.replace(DB_PATH, backup)
+        except Exception:
+            traceback.print_exc()
+        # Yeni, temiz veritabanı oluştur.
+        init_db()
+
 # Init once on import
-init_db()
+boot_init_db()
 start_scheduler_once()
 
 if __name__ == "__main__":
