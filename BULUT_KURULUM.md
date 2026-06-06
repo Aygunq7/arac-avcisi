@@ -1,17 +1,5 @@
-# Araç Avcısı v19
+# Araç Avcısı v20
 
-GitHub’a tüm dosyaları yükleyin ve Render’da Deploy latest commit çalıştırın.
+Temiz çalışan sürüm. Gerçek ilan linki bulma + açık web yedek arama eklendi.
 
-Deploy sonrası kontrol:
-
-```
-/health
-```
-
-Beklenen sürüm:
-
-```
-v19-arabam-liste-ve-tekil-sonuc
-```
-
-Telefon eski sayfayı açarsa önce `/reset-cache` adresini çalıştırın.
+Health: `/health` içinde `v20-gercek-ilan-yedek-arama` görünmelidir.

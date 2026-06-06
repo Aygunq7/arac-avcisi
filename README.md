@@ -1,5 +1,5 @@
-# Araç Avcısı v19
+# Araç Avcısı v20
 
-Bu sürümde Arabam liste okuma motoru güçlendirildi, Otoplus/benzeri sitelerde kategori sayfalarının sahte ilan gibi görünmesi engellendi ve aynı kayıtların tekrar etmesi azaltıldı.
+Temiz çalışan sürüm. Gerçek ilan linki bulma + açık web yedek arama eklendi.
 
-Kontrol: `/health` içinde `v19-arabam-liste-ve-tekil-sonuc` görünmelidir. Deploy sonrası telefonda eski PWA kalırsa `/reset-cache` açın.
+Health: `/health` içinde `v20-gercek-ilan-yedek-arama` görünmelidir.

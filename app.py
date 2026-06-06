@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 load_dotenv()
 
-VERSION = "v19-arabam-liste-ve-tekil-sonuc"
+VERSION = "v20-gercek-ilan-yedek-arama"
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv("DATA_DIR") or os.path.join(APP_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -31,7 +31,7 @@ JINA_API_KEY = os.getenv("JINA_API_KEY", "").strip()
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
-app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-v19")
+app.secret_key = os.getenv("SECRET_KEY", "arac-avcisi-v20")
 
 @app.after_request
 def no_cache(resp):
@@ -654,10 +654,111 @@ def parse_reader_text(source, text, search, final_url):
     # Gerçek ilan linki yoksa liste boş kalır, sahte kayıt oluşmaz.
     return dedupe_items(out)
 
+
+def unwrap_search_url(u):
+    """DuckDuckGo/Bing yönlendirme linkini gerçek site linkine çevirir."""
+    try:
+        pr = urlparse(u)
+        qs = dict([x.split("=", 1) for x in pr.query.split("&") if "=" in x]) if pr.query else {}
+        from urllib.parse import unquote
+        if "uddg" in qs:
+            return unquote(qs["uddg"])
+        if "u" in qs:
+            return unquote(qs["u"])
+    except Exception:
+        pass
+    return u
+
+def fallback_passes(item, search):
+    raw = " ".join([str(item.get(k) or "") for k in ["title", "raw_text", "url", "city"]])
+    if not identity_ok(raw, search, loose=True):
+        return False
+    toks = package_tokens(search.get("package_name"))
+    # Paket seçildiyse en az bir ana paket/motor kelimesi görünüyorsa daha güvenli kabul edilir.
+    # Arama motoru snippet'i bazen paketi göstermediği için hiçbir sonuç gelmemesi yerine
+    # marka/model eşleşen linkleri kabul ediyoruz; sonuç kartında fiyat yoksa da bunu açık bırakıyoruz.
+    h = tr_norm(raw)
+    if toks and not any(t in h for t in toks):
+        # Comfortline/Elegance gibi paket yoksa, yine de aynı marka-model gerçek ilan linkini tamamen atmayalım.
+        # Doğrudan sitede açıldığında kullanıcı filtreli listeyi görür.
+        pass
+    # Sayısal filtreleri sadece veri varsa uygula; veri yoksa sahte üretme.
+    pmin, pmax = as_int(search.get("price_min")), as_int(search.get("price_max"))
+    price = as_int(item.get("price"))
+    if price is not None:
+        if pmin and price < pmin: return False
+        if pmax and price > pmax: return False
+    ymin, ymax = as_int(search.get("year_min")), as_int(search.get("year_max"))
+    year = as_int(item.get("year"))
+    if year is not None:
+        if ymin and year < ymin: return False
+        if ymax and year > ymax: return False
+    kmmax = as_int(search.get("km_max"))
+    km = as_int(item.get("km"))
+    if km is not None and kmmax and km > kmmax: return False
+    return True
+
+def search_engine_fallback(source, search):
+    """Kaynak site liste vermiyorsa, arama motoru üzerinden gerçek ilan linki bulmaya çalışır.
+    Bu yöntem CAPTCHA/proxy/şifre atlatmaz; sadece herkese açık sonuçları okur.
+    """
+    domain = urlparse(source["base"]).netloc.replace("www.", "")
+    qparts = [search.get("brand"), search.get("model")]
+    pkg = search.get("package_name") or ""
+    if pkg and pkg != "Farketmez": qparts.append(pkg)
+    city = search.get("city") or ""
+    if city and city != "Tüm Türkiye": qparts.append(city)
+    qparts.append("ikinci el")
+    query = " ".join([str(x).strip() for x in qparts if x]) + f" site:{domain}"
+    # Sahibinden için ilan detay linklerini hedefle.
+    if source["key"] == "sahibinden":
+        query += " /ilan/"
+    url = "https://duckduckgo.com/html/?" + urlencode({"q": query})
+    try:
+        r = requests.get(url, headers=headers(), timeout=30)
+        if r.status_code >= 400 or not r.text:
+            return [], f"yedek arama HTTP {r.status_code}"
+        soup = BeautifulSoup(r.text, "html.parser")
+        candidates = []
+        for res in soup.select(".result, .web-result, div.result"):
+            a = res.select_one("a.result__a") or res.find("a", href=True)
+            if not a: continue
+            href = unwrap_search_url(a.get("href", ""))
+            if href.startswith("//"): href = "https:" + href
+            if not href.startswith("http"): continue
+            parsed_host = urlparse(href).netloc.replace("www.", "")
+            if domain not in parsed_host:
+                continue
+            if not real_listing_url(source["key"], href):
+                # Liste/kategori sonuçlarını ilan listesine eklemiyoruz.
+                continue
+            title = a.get_text(" ", strip=True)
+            snippet = res.get_text(" ", strip=True)
+            item = {
+                "source_key": source["key"],
+                "source_name": source["name"],
+                "title": clean_title(title),
+                "url": href.split("#")[0],
+                "price": parse_price(snippet),
+                "year": parse_year(snippet),
+                "km": parse_km(snippet),
+                "city": extract_city_text(snippet),
+                "raw_text": snippet[:2500]
+            }
+            if item["title"] and fallback_passes(item, search):
+                candidates.append(item)
+        return dedupe_items(candidates)[:20], f"yedek arama liste: {len(candidates)}"
+    except Exception as e:
+        return [], f"yedek arama hata {e.__class__.__name__}"
+
 def fetch_source(source, search):
     url = build_url(source["key"], search)
     if not source.get("can_parse"):
-        return [], {"source": source["name"], "url": url, "status": "Bu kaynak uygulama içi liste vermiyor, siteyi aç butonu hazır", "status_code": None}
+        # Letgo/Facebook gibi JS/oturum isteyen kaynaklarda yine de açık webde gerçek ilan linki aramayı dener.
+        fb_items, fb_status = search_engine_fallback(source, search)
+        if fb_items:
+            return fb_items, {"source": source["name"], "url": url, "status": fb_status, "status_code": None}
+        return [], {"source": source["name"], "url": url, "status": f"Bu kaynak uygulama içi liste vermiyor / {fb_status}", "status_code": None}
     try:
         r = requests.get(url, headers=headers(), timeout=35, allow_redirects=True)
         status = f"HTTP {r.status_code}"
@@ -665,25 +766,36 @@ def fetch_source(source, search):
             items = parse_html(source, r.text, search, r.url or url)
             if items:
                 return items, {"source": source["name"], "url": url, "status": f"{status} / liste: {len(items)}", "status_code": r.status_code}
+            reader_status = "reader yok"
             if source.get("reader"):
                 txt, rs = reader_fetch(url)
+                reader_status = rs
                 if txt:
                     items = parse_reader_text(source, txt, search, url)
                     if items:
                         return items, {"source": source["name"], "url": url, "status": f"{status} / reader liste: {len(items)}", "status_code": r.status_code}
-                return [], {"source": source["name"], "url": url, "status": f"{status} / liste yok / {rs}", "status_code": r.status_code}
-            return [], {"source": source["name"], "url": url, "status": f"{status} / liste yok", "status_code": r.status_code}
-        # 429/403 gibi durumlarda sadece reader dene; gizli giriş/proxy yok.
+            fb_items, fb_status = search_engine_fallback(source, search)
+            if fb_items:
+                return fb_items, {"source": source["name"], "url": url, "status": f"{status} / {reader_status} / {fb_status}", "status_code": r.status_code}
+            return [], {"source": source["name"], "url": url, "status": f"{status} / liste yok / {reader_status} / {fb_status}", "status_code": r.status_code}
+        # 429/403 gibi durumlarda önce reader, sonra açık web yedek arama. Gizli giriş/proxy yok.
+        reader_status = "reader yok"
         if source.get("reader"):
             txt, rs = reader_fetch(url)
+            reader_status = rs
             if txt:
                 items = parse_reader_text(source, txt, search, url)
                 if items:
                     return items, {"source": source["name"], "url": url, "status": f"{status} / reader liste: {len(items)}", "status_code": r.status_code}
-            return [], {"source": source["name"], "url": url, "status": f"{status} / {rs}", "status_code": r.status_code}
-        return [], {"source": source["name"], "url": url, "status": status, "status_code": r.status_code}
+        fb_items, fb_status = search_engine_fallback(source, search)
+        if fb_items:
+            return fb_items, {"source": source["name"], "url": url, "status": f"{status} / {reader_status} / {fb_status}", "status_code": r.status_code}
+        return [], {"source": source["name"], "url": url, "status": f"{status} / {reader_status} / {fb_status}", "status_code": r.status_code}
     except Exception as e:
-        return [], {"source": source["name"], "url": url, "status": f"Hata: {e.__class__.__name__}", "status_code": None}
+        fb_items, fb_status = search_engine_fallback(source, search)
+        if fb_items:
+            return fb_items, {"source": source["name"], "url": url, "status": f"Hata: {e.__class__.__name__} / {fb_status}", "status_code": None}
+        return [], {"source": source["name"], "url": url, "status": f"Hata: {e.__class__.__name__} / {fb_status}", "status_code": None}
 
 # -------------------------------------------------------------
 # Arama motoru
@@ -769,7 +881,7 @@ def queue_initial_run(search_id):
 @app.route("/reset-cache")
 def reset_cache():
     # Bu sayfa eski mobil PWA/service worker kaydını temizler ve yeni sürüme yönlendirir.
-    return """<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Önbellek temizleniyor</title><style>body{font-family:system-ui;background:#0b1220;color:#eaf2ff;padding:32px} .box{max-width:620px;margin:auto;background:#151d2b;border:1px solid #2b374a;border-radius:20px;padding:24px}</style></head><body><div class='box'><h1>Araç Avcısı temizleniyor</h1><p>Eski uygulama önbelleği siliniyor. Birkaç saniye içinde yeni sürüm açılacak.</p></div><script>(async()=>{try{if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister()));} if(window.caches){const keys=await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k)));}}catch(e){} location.replace('/?v=19&cache=temiz');})();</script></body></html>"""
+    return """<!doctype html><html lang='tr'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Önbellek temizleniyor</title><style>body{font-family:system-ui;background:#0b1220;color:#eaf2ff;padding:32px} .box{max-width:620px;margin:auto;background:#151d2b;border:1px solid #2b374a;border-radius:20px;padding:24px}</style></head><body><div class='box'><h1>Araç Avcısı temizleniyor</h1><p>Eski uygulama önbelleği siliniyor. Birkaç saniye içinde yeni sürüm açılacak.</p></div><script>(async()=>{try{if('serviceWorker' in navigator){const regs=await navigator.serviceWorker.getRegistrations(); await Promise.all(regs.map(r=>r.unregister()));} if(window.caches){const keys=await caches.keys(); await Promise.all(keys.map(k=>caches.delete(k)));}}catch(e){} location.replace('/?v=20&cache=temiz');})();</script></body></html>"""
 
 @app.route("/")
 def index():
