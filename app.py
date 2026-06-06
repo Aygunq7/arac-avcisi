@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, redirect, jsonify, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 
-VERSION = "v26-temiz-link-filtre-bildirim"
+VERSION = "v27-create-hatasi-db-migration"
 DATA_DIR = os.getenv("DATA_DIR", "data")
 DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.db")
 DEFAULT_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4") or 4)
@@ -112,6 +112,49 @@ def db():
     return con
 
 
+
+TRACK_COLUMNS = {
+    "name": "TEXT", "brand": "TEXT", "model": "TEXT", "trim": "TEXT", "city": "TEXT",
+    "year_min": "INTEGER", "year_max": "INTEGER", "km_max": "INTEGER",
+    "price_min": "INTEGER", "price_max": "INTEGER",
+    "fuel": "TEXT DEFAULT 'Farketmez'", "gear": "TEXT DEFAULT 'Farketmez'", "sources": "TEXT DEFAULT '[]'",
+    "interval_hours": "INTEGER DEFAULT 4", "notify_email": "TEXT DEFAULT ''", "telegram_chat_id": "TEXT DEFAULT ''",
+    "active": "INTEGER DEFAULT 1", "created_at": "TEXT", "updated_at": "TEXT",
+    "last_check_at": "TEXT", "last_status": "TEXT DEFAULT ''", "item_count": "INTEGER DEFAULT 0"
+}
+LISTING_COLUMNS = {
+    "track_id": "INTEGER", "source": "TEXT", "title": "TEXT", "price": "INTEGER",
+    "year": "INTEGER", "km": "INTEGER", "city": "TEXT", "url": "TEXT", "uid": "TEXT",
+    "first_seen": "TEXT", "last_seen": "TEXT"
+}
+EVENT_COLUMNS = {
+    "track_id": "INTEGER", "type": "TEXT", "source": "TEXT", "title": "TEXT", "price_old": "INTEGER",
+    "price_new": "INTEGER", "url": "TEXT", "created_at": "TEXT", "notify_status": "TEXT DEFAULT ''"
+}
+
+def ensure_columns(con, table, columns):
+    """Eski sürümlerden kalan SQLite tablolarını çökmeden yeni sürüme yükseltir."""
+    try:
+        existing = {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
+        for name, ddl in columns.items():
+            if name not in existing:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+        con.commit()
+    except Exception:
+        # Migration hatası uygulamayı durdurmasın. Gerekirse reset-db endpointi kullanılabilir.
+        con.rollback()
+        raise
+
+def backup_broken_db(reason=""):
+    try:
+        if os.path.exists(DB_PATH):
+            bak = DB_PATH + ".broken." + str(int(time.time()))
+            os.rename(DB_PATH, bak)
+            return bak
+    except Exception:
+        return None
+    return None
+
 def init_db():
     os.makedirs(DATA_DIR, exist_ok=True)
     con = db()
@@ -138,6 +181,11 @@ def init_db():
         track_id INTEGER, type TEXT, source TEXT, title TEXT, price_old INTEGER,
         price_new INTEGER, url TEXT, created_at TEXT, notify_status TEXT DEFAULT ''
     )""")
+    # Eski deployment'lardan kalan tablo şemaları varsa eksik kolonları tamamla.
+    ensure_columns(con, "tracks", TRACK_COLUMNS)
+    ensure_columns(con, "listings", LISTING_COLUMNS)
+    ensure_columns(con, "events", EVENT_COLUMNS)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_listings_track_uid ON listings(track_id, uid)")
     con.commit()
     con.close()
 
@@ -696,23 +744,48 @@ def index():
 
 @app.route("/create", methods=["POST"])
 def create():
-    init_db()
-    f = request.form
-    brand = f.get("brand_custom") or f.get("brand")
-    model = f.get("model_custom") or f.get("model")
-    trim = f.get("trim_custom") or f.get("trim") or "Farketmez"
-    name = f.get("name") or f"{brand} {model} {trim if trim!='Farketmez' else ''}".strip()
-    sources = f.getlist("sources") or ["arabam"]
-    data = (
-        name, brand, model, trim, f.get("city") or "Tüm Türkiye", as_int(f.get("year_min")), as_int(f.get("year_max")), as_int(f.get("km_max")), as_int(f.get("price_min")), as_int(f.get("price_max")), f.get("fuel") or "Farketmez", f.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), as_int(f.get("interval_hours"), DEFAULT_INTERVAL_HOURS), f.get("notify_email") or "", f.get("telegram_chat_id") or "", 1, now_iso(), now_iso()
-    )
-    con = db(); cur = con.cursor()
-    cur.execute("""INSERT INTO tracks(name,brand,model,trim,city,year_min,year_max,km_max,price_min,price_max,fuel,gear,sources,interval_hours,notify_email,telegram_chat_id,active,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
-    tid = cur.lastrowid
-    con.commit(); con.close()
-    background_check(tid)
-    return redirect(url_for("index"))
+    try:
+        init_db()
+        f = request.form
+        brand = (f.get("brand_custom") or f.get("brand") or "").strip()
+        model = (f.get("model_custom") or f.get("model") or "").strip()
+        trim = (f.get("trim_custom") or f.get("trim") or "Farketmez").strip() or "Farketmez"
+        if not brand or not model:
+            return redirect(url_for("index", error="Marka ve model seçilmedi"))
+        name = (f.get("name") or f"{brand} {model} {trim if trim!='Farketmez' else ''}".strip()).strip()
+        sources = f.getlist("sources") or ["arabam"]
+        data = (
+            name, brand, model, trim, f.get("city") or "Tüm Türkiye", as_int(f.get("year_min")), as_int(f.get("year_max")), as_int(f.get("km_max")), as_int(f.get("price_min")), as_int(f.get("price_max")), f.get("fuel") or "Farketmez", f.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), as_int(f.get("interval_hours"), DEFAULT_INTERVAL_HOURS), f.get("notify_email") or "", f.get("telegram_chat_id") or "", 1, now_iso(), now_iso()
+        )
+        con = db(); cur = con.cursor()
+        cur.execute("""INSERT INTO tracks(name,brand,model,trim,city,year_min,year_max,km_max,price_min,price_max,fuel,gear,sources,interval_hours,notify_email,telegram_chat_id,active,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
+        tid = cur.lastrowid
+        con.commit(); con.close()
+        background_check(tid)
+        return redirect(url_for("index"))
+    except sqlite3.OperationalError as e:
+        # Eski tablo şeması yüzünden /create 500 vermesin. Şemayı yükseltip bir kez daha dene.
+        try:
+            init_db()
+            f = request.form
+            brand = (f.get("brand_custom") or f.get("brand") or "").strip()
+            model = (f.get("model_custom") or f.get("model") or "").strip()
+            trim = (f.get("trim_custom") or f.get("trim") or "Farketmez").strip() or "Farketmez"
+            name = (f.get("name") or f"{brand} {model} {trim if trim!='Farketmez' else ''}".strip()).strip()
+            sources = f.getlist("sources") or ["arabam"]
+            data = (name, brand, model, trim, f.get("city") or "Tüm Türkiye", as_int(f.get("year_min")), as_int(f.get("year_max")), as_int(f.get("km_max")), as_int(f.get("price_min")), as_int(f.get("price_max")), f.get("fuel") or "Farketmez", f.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), as_int(f.get("interval_hours"), DEFAULT_INTERVAL_HOURS), f.get("notify_email") or "", f.get("telegram_chat_id") or "", 1, now_iso(), now_iso())
+            con = db(); cur = con.cursor()
+            cur.execute("""INSERT INTO tracks(name,brand,model,trim,city,year_min,year_max,km_max,price_min,price_max,fuel,gear,sources,interval_hours,notify_email,telegram_chat_id,active,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
+            tid = cur.lastrowid
+            con.commit(); con.close()
+            background_check(tid)
+            return redirect(url_for("index"))
+        except Exception as e2:
+            return f"Takip oluşturulamadı. Veritabanı uyumsuzluğu olabilir. Önce /reset-db?key=temizle çalıştırıp tekrar dene.<br><pre>{type(e).__name__}: {e}\n{type(e2).__name__}: {e2}</pre>", 200
+    except Exception as e:
+        return f"Takip oluşturulamadı. Hata yakalandı, uygulama çökmedi.<br><pre>{type(e).__name__}: {e}</pre><br><a href='/'>Geri dön</a>", 200
 
 
 @app.route("/open-url/<int:track_id>/<source>")
@@ -763,8 +836,8 @@ def health():
 def reset_cache():
     return """<!doctype html><meta charset='utf-8'><script>
     if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister()))}
-    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=26&t='+Date.now());
-    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=26'>Aç</a>"""
+    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=27&t='+Date.now());
+    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=27'>Aç</a>"""
 
 
 @app.route("/reset-db")
