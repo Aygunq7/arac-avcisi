@@ -1,91 +1,80 @@
 <!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#071120">
-  <title>Araç Avcısı</title>
-  <link rel="manifest" href="/static/manifest.json?v=24">
-  <link rel="stylesheet" href="/static/app.css?v=24">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Araç Avcısı</title>
+<link rel="stylesheet" href="/static/app.css?v=25">
 </head>
 <body>
-  <main class="wrap">
-    <header class="hero">
-      <div>
-        <div class="eyebrow">MOBİL İKİNCİ EL ARAÇ TAKİP PANELİ</div>
-        <h1>Araç Avcısı</h1>
-        <p>Bildirim testi eklenmiş stabil sürüm. Telegram/mail ayarı eksikse ekranda sebebini gösterir; yeni ilan ve fiyat düşüşlerinde ilan linki gönderir.</p>
-      </div>
-      <div class="badge">{{ version }}</div>
-    </header>
-
-    <section class="card">
-      <h2>Yeni takip oluştur</h2>
-      <div class="grid two">
-        <label>Arama adı<input id="name" placeholder="Örn: Tiguan Comfortline"></label>
-        <label>Şehir<select id="city"></select></label>
-      </div>
-      <div class="grid three">
-        <label>Marka<select id="brand"></select></label>
-        <label>Model<select id="model"></select></label>
-        <label>Paket / Motor<select id="variant"></select></label>
-      </div>
-      <details class="manual"><summary>Listede yoksa özel marka / model / paket yaz</summary>
-        <div class="grid three">
-          <label>Özel marka<input id="brand_custom" placeholder="Örn: Jeep"></label>
-          <label>Özel model<input id="model_custom" placeholder="Örn: Compass"></label>
-          <label>Özel paket<input id="variant_custom" placeholder="Örn: 1.3 e-Hybrid Limited"></label>
-        </div>
-      </details>
-      <div class="grid three">
-        <label>En düşük yıl<input id="min_year" type="number" value="2016"></label>
-        <label>En yüksek yıl<input id="max_year" type="number" value="2026"></label>
-        <label>Max km<input id="max_km" type="number" value="110000"></label>
-      </div>
-      <div class="grid two">
-        <label>Min fiyat<input id="min_price" type="number" value="1000000"></label>
-        <label>Max fiyat<input id="max_price" type="number" value="1750000"></label>
-      </div>
-      <div class="grid two">
-        <label>Yakıt<select id="fuel"></select></label>
-        <label>Vites<select id="transmission"></select></label>
-      </div>
-      <h3>Siteleri seç</h3>
-      <div id="sources" class="chips"></div>
-      <div class="grid three">
-        <label>Kaç saatte bir kontrol edilsin?<select id="interval_hours">
-          <option value="1">1 saatte bir</option><option value="2">2 saatte bir</option><option value="4" selected>4 saatte bir</option><option value="6">6 saatte bir</option><option value="12">12 saatte bir</option><option value="24">24 saatte bir</option>
-        </select></label>
-        <label>Mail adresi<input id="email" placeholder="ornek@mail.com"></label>
-        <label>Telegram Chat ID<input id="telegram_chat_id" placeholder="Boşsa .env kullanılır"></label>
-      </div>
-      <button id="createBtn" class="primary">Takibi başlat</button>
-      <p class="note">İlk kayıt hemen oluşturulur. İlan taraması arka planda çalışır. Sitenin otomatik liste vermediği durumda uygulama yanlış/sahte ilan üretmez.</p>
-    </section>
-
-
-    <section class="card">
-      <h2>Bildirim testi</h2>
-      <p class="note">Önce buradan test bildirimi gönder. Telegram veya mail ayarında eksik varsa uygulama sebebini açıkça gösterir.</p>
-      <div class="grid two">
-        <label>Test mail adresi<input id="test_email" placeholder="ornek@mail.com"></label>
-        <label>Test Telegram Chat ID<input id="test_telegram_chat_id" placeholder="Boşsa Render TELEGRAM_CHAT_ID kullanılır"></label>
-      </div>
-      <div class="actions"><button id="testNotifyBtn">Test bildirimi gönder</button><button id="notifyStatusBtn">Bildirim ayarını kontrol et</button></div>
-      <div id="notifyStatus" class="empty">Henüz test yapılmadı.</div>
-    </section>
-    <section class="card">
-      <div class="section-head"><h2>Kayıtlı takipler</h2><button id="refreshBtn">Yenile</button></div>
-      <div id="searches"></div>
-    </section>
-
-    <section class="card">
-      <h2>Son bildirim olayları</h2>
-      <div id="events"></div>
-    </section>
-  </main>
-  <div id="toast" class="toast"></div>
-  <script>window.APP_VERSION='{{ version }}';</script>
-  <script src="/static/app.js?v=24"></script>
-</body>
-</html>
+<header class="hero">
+  <div><div class="kicker">Mobil ikinci el araç takip paneli</div><h1>Araç Avcısı</h1><p>Filtreler sunucudan gelir. JavaScript bozulsa bile marka, model, paket, şehir seçimleri açılır.</p></div>
+  <div class="badge">{{ version }}</div>
+</header>
+<main>
+<section class="card">
+<h2>Yeni takip oluştur</h2>
+<form method="post" action="/create" class="grid">
+  <label>Arama adı<input name="name" placeholder="Örn: Tiguan Comfortline"></label>
+  <label>Şehir<select name="city">{% for c in cities %}<option>{{c}}</option>{% endfor %}</select></label>
+  <label>Marka<select id="brand" name="brand">{% for b in brands.keys() %}<option>{{b}}</option>{% endfor %}</select></label>
+  <label>Model<select id="model" name="model">{% for m in all_models %}<option>{{m}}</option>{% endfor %}</select></label>
+  <label>Paket / Motor<select id="trim" name="trim">{% for p in all_packages %}<option>{{p}}</option>{% endfor %}</select></label>
+  <details class="full"><summary>Listede yoksa özel marka / model / paket yaz</summary><div class="grid inner"><label>Özel marka<input name="brand_custom" placeholder="Örn: Jeep"></label><label>Özel model<input name="model_custom" placeholder="Örn: Compass"></label><label>Özel paket<input name="trim_custom" placeholder="Örn: 1.3 e-Hybrid Limited"></label></div></details>
+  <label>En düşük yıl<input name="year_min" type="number" value="2016"></label>
+  <label>En yüksek yıl<input name="year_max" type="number" value="2026"></label>
+  <label>Max km<input name="km_max" type="number" value="110000"></label>
+  <label>Min fiyat<input name="price_min" type="number" value="1000000"></label>
+  <label>Max fiyat<input name="price_max" type="number" value="1750000"></label>
+  <label>Yakıt<select name="fuel">{% for f in fuel_options %}<option>{{f}}</option>{% endfor %}</select></label>
+  <label>Vites<select name="gear">{% for g in gear_options %}<option {% if g=='Otomatik' %}selected{% endif %}>{{g}}</option>{% endfor %}</select></label>
+  <div class="full"><h3>Siteleri seç</h3><div class="chips">{% for key,label in sources %}<label class="chip"><input type="checkbox" name="sources" value="{{key}}" checked> {{label}}</label>{% endfor %}</div></div>
+  <label>Kaç saatte bir kontrol edilsin?<select name="interval_hours">{% for i in intervals %}<option value="{{i}}" {% if i==4 %}selected{% endif %}>{{i}} saatte bir</option>{% endfor %}</select></label>
+  <label>Mail adresi<input name="notify_email" placeholder="ornek@mail.com"></label>
+  <label>Telegram Chat ID<input name="telegram_chat_id" placeholder="Boşsa Render .env kullanılır"></label>
+  <div class="full"><button class="primary" type="submit">Takibi başlat</button><p class="hint">Takip önce kaydedilir, arama arkada çalışır. Engel koyan sitelerde sahte ilan üretilmez.</p></div>
+</form>
+</section>
+<section class="card">
+<h2>Bildirim testi</h2>
+<form method="post" action="/test-notify" class="grid">
+<label>Test maili<input name="notify_email" placeholder="Boşsa DEFAULT_NOTIFY_EMAIL"></label>
+<label>Test Telegram Chat ID<input name="telegram_chat_id" placeholder="Boşsa TELEGRAM_CHAT_ID"></label>
+<div class="full"><button type="submit">Test bildirimi gönder</button></div>
+</form>
+</section>
+<section class="card">
+<h2>Kayıtlı takipler <a class="smallbtn" href="/">Yenile</a></h2>
+{% if not tracks %}<div class="empty">Henüz takip yok.</div>{% endif %}
+{% for t in tracks %}
+<article class="track">
+<h3>{{t.name}}</h3>
+<div class="pills"><span>{{t.brand}} {{t.model}}</span><span>{{t.trim}}</span><span>{{t.city}}</span><span>{{'Aktif' if t.active else 'Pasif'}}</span><span>{{t.interval_hours}} saatte bir</span></div>
+<p>Kaynaklar: {{t.sources|join(', ')}}</p>
+<p>Bulunan ilan: {{t.item_count}}</p>
+<p>Son kontrol: {{t.last_check_at or 'henüz yok'}}</p>
+<p class="status">{{t.last_status or 'Takip kaydedildi. Şimdi kontrol edebilirsin.'}}</p>
+<div class="buttons">
+{% for key,label in sources %}{% if key in t.sources %}<a href="{{ url_for('index') }}#" onclick="window.open('/open-url/{{t.id}}/{{key}}','_blank'); return false;">{{label}}'de aç</a>{% endif %}{% endfor %}
+<form method="post" action="/check/{{t.id}}"><button>Şimdi kontrol et</button></form>
+<form method="post" action="/toggle/{{t.id}}"><button>Aktif/Pasif</button></form>
+<form method="post" action="/delete/{{t.id}}" onsubmit="return confirm('Takip silinsin mi?')"><button class="danger">Takibi sil</button></form>
+</div>
+<div class="listingwrap">
+{% set items = listings[t.id] %}
+{% if not items %}<div class="empty">Henüz gerçek ilan yakalanmadı. Siteler engel koyarsa ilgili “sitede aç” butonunu kullan.</div>{% endif %}
+{% for it in items %}
+<div class="listing">
+<div><h4>{{it.title}}</h4><p>{{it.source}}{% if it.year %} • {{it.year}}{% endif %}{% if it.km %} • {{'{:,}'.format(it.km).replace(',', '.')}} km{% endif %}{% if it.city %} • {{it.city}}{% endif %}</p><input readonly value="{{it.url}}"></div>
+<div class="price">{% if it.price %}{{'{:,}'.format(it.price).replace(',', '.')}} TL{% else %}Fiyat yok{% endif %}</div><a class="go" href="{{it.url}}" target="_blank">İlana git</a>
+</div>
+{% endfor %}
+</div>
+</article>
+{% endfor %}
+</section>
+<section class="card"><h2>Son bildirim olayları</h2>{% if not events %}<div class="empty">Henüz bildirim yok.</div>{% endif %}{% for e in events %}<div class="event"><b>{{e.type}}</b> {{e.title}}<br><small>{{e.source}} • {{e.created_at}}</small><br><a href="{{e.url}}" target="_blank">İlan linki</a></div>{% endfor %}</section>
+</main>
+<script>window.BRANDS={{brands|tojson}};</script>
+<script src="/static/app.js?v=25"></script>
+</body></html>
