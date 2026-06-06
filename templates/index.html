@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Araç Avcısı</title>
-<link rel="stylesheet" href="/static/app.css?v=25">
+<link rel="stylesheet" href="/static/app.css?v=26">
 </head>
 <body>
 <header class="hero">
@@ -76,5 +76,5 @@
 <section class="card"><h2>Son bildirim olayları</h2>{% if not events %}<div class="empty">Henüz bildirim yok.</div>{% endif %}{% for e in events %}<div class="event"><b>{{e.type}}</b> {{e.title}}<br><small>{{e.source}} • {{e.created_at}}</small><br><a href="{{e.url}}" target="_blank">İlan linki</a></div>{% endfor %}</section>
 </main>
 <script>window.BRANDS={{brands|tojson}};</script>
-<script src="/static/app.js?v=25"></script>
+<script src="/static/app.js?v=26"></script>
 </body></html>

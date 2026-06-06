@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, redirect, jsonify, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 
-VERSION = "v25-filters-server-rendered-stable"
+VERSION = "v26-temiz-link-filtre-bildirim"
 DATA_DIR = os.getenv("DATA_DIR", "data")
 DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.db")
 DEFAULT_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4") or 4)
@@ -171,6 +171,57 @@ def query_terms(t):
     return " ".join([p for p in parts if p])
 
 
+# Hangi kaynaklardan uygulama içine otomatik ilan alınacağı.
+# Letgo/Facebook gibi sayfalar çoğu zaman resim/CDN veya alakasız ürün linki döndürdüğü için
+# artık uygulama içinde listeye alınmaz; sadece ilgili sitede arama butonu açılır.
+AUTO_LIST_SOURCES = {"arabam", "sahibinden", "otoplus", "otokoc", "vavacars", "arabasepeti", "arabalar"}
+OPEN_ONLY_SOURCES = {"letgo", "facebook"}
+
+CITY_SLUGS = {slug_tr(c): c for c in CITIES if c != "Tüm Türkiye"}
+
+SUV_MODELS = {"tiguan", "qashqai", "duster", "kuga", "3008", "5008", "2008", "tucson", "sportage", "rav4", "c-hr", "x1", "x3", "x5", "q2", "q3", "q5", "q7", "cr-v", "hr-v", "bayon", "kona", "mokka", "crossland", "grandland", "karoq", "kodiaq", "kamiq", "ateca", "arona", "compass"}
+
+def vehicle_category_slug(t):
+    model = slug_tr(t.get("model") or "")
+    if model in SUV_MODELS:
+        return "arazi-suv-pick-up"
+    return "otomobil"
+
+def sahibinden_category_slug(t):
+    model = slug_tr(t.get("model") or "")
+    if model in SUV_MODELS:
+        return "arazi-suv-pickup"
+    return "otomobil"
+
+def build_filter_query(t):
+    qs = {}
+    if t.get("price_min"): qs["price_min"] = t.get("price_min")
+    if t.get("price_max"): qs["price_max"] = t.get("price_max")
+    if t.get("year_min"): qs["year_min"] = t.get("year_min")
+    if t.get("year_max"): qs["year_max"] = t.get("year_max")
+    if t.get("km_max"): qs["km_max"] = t.get("km_max")
+    if t.get("gear") and t.get("gear") != "Farketmez": qs["gear"] = t.get("gear")
+    if t.get("fuel") and t.get("fuel") != "Farketmez": qs["fuel"] = t.get("fuel")
+    return qs
+
+def sahibinden_query_params(t):
+    # Sahibinden açık parametrelerin bir kısmı kategoriye göre değişebilir. Bu yüzden aç butonunda
+    # daha güvenli olan genel arama kullanılır; direkt okuma için yaygın filtreler eklenir.
+    qs = {"query_text": query_terms(t)}
+    if t.get("price_min"): qs["price_min"] = t.get("price_min")
+    if t.get("price_max"): qs["price_max"] = t.get("price_max")
+    if t.get("km_max"): qs["a4_max"] = t.get("km_max")
+    if t.get("year_min"): qs["a5_min"] = t.get("year_min")
+    if t.get("year_max"): qs["a5_max"] = t.get("year_max")
+    return qs
+
+def normalize_url(url):
+    if not url:
+        return ""
+    url = url.strip().split()[0].rstrip('.,;"\'')
+    return url.split("#")[0]
+
+
 def list_url(source, t):
     brand = t.get("brand") or ""
     model = t.get("model") or ""
@@ -181,54 +232,73 @@ def list_url(source, t):
     m = slug_tr(model)
     tm = slug_tr(trim if trim != "Farketmez" else "")
     city_slug = slug_tr(city if city != "Tüm Türkiye" else "")
-    qs = {}
-    if t.get("price_min"): qs["price_min"] = t.get("price_min")
-    if t.get("price_max"): qs["price_max"] = t.get("price_max")
-    if t.get("year_min"): qs["year_min"] = t.get("year_min")
-    if t.get("year_max"): qs["year_max"] = t.get("year_max")
-    if t.get("km_max"): qs["km_max"] = t.get("km_max")
+    category = vehicle_category_slug(t)
+    qs = build_filter_query(t)
     add = ("?" + urlencode(qs)) if qs else ""
+
     if source == "arabam":
         path = f"{b}-{m}" + (f"-{tm}" if tm else "")
-        return f"https://www.arabam.com/ikinci-el/arazi-suv-pick-up/{path}{add}"
+        return f"https://www.arabam.com/ikinci-el/{category}/{path}{add}"
+
     if source == "sahibinden":
-        path = f"arazi-suv-pickup-{b}-{m}" + (f"-{tm}" if tm else "")
-        return f"https://www.sahibinden.com/{path}?{urlencode({'price_min': t.get('price_min') or '', 'price_max': t.get('price_max') or '', 'a4_max': t.get('km_max') or '', 'a5_min': t.get('year_min') or '', 'a5_max': t.get('year_max') or ''})}"
+        # Kategori URL'leri sık bozulduğu için kullanıcıyı daha güvenli genel aramaya yönlendir.
+        # Otomatik okuyucu arka planda yine /ilan/ linklerini yakalamaya çalışır.
+        return "https://www.sahibinden.com/arama?" + urlencode(sahibinden_query_params(t))
+
     if source == "otoplus":
+        # Otoplus'ta bazı marka/model yolları kategori sayfası döndürür; listeye sahte ilan almayız.
         path = f"{b}/{m}" + (f"/{m}-{tm}" if tm else "")
         return f"https://www.otoplus.com/{path}{add}"
+
     if source == "otokoc":
         return f"https://www.otokocikinciel.com/ikinci-el-{b}-{m}{add}"
+
     if source == "vavacars":
         return f"https://tr.vava.cars/ikinci-el-araba?search={quote_plus(q)}"
+
     if source == "arabasepeti":
         return f"https://www.arabasepeti.com/ikinci-el?search={quote_plus(q)}"
+
     if source == "arabalar":
         return f"https://www.arabalar.com.tr/ikinci-el/{b}-{m}{add}"
+
     if source == "letgo":
-        return f"https://www.letgo.com/arama?q={quote_plus(q)}"
+        return f"https://www.letgo.com/arama?q={quote_plus(q + ' otomobil')}"
+
     if source == "facebook":
-        return f"https://www.facebook.com/marketplace/search/?query={quote_plus(q)}"
+        return f"https://www.facebook.com/marketplace/search/?query={quote_plus(q + ' araba')}"
+
     return "https://www.google.com/search?q=" + quote_plus(q)
 
-
 def is_detail_url(source, url):
+    url = normalize_url(url)
     if not url or not url.startswith("http"):
         return False
-    bad = ["/search", "arama", "filtre", "kategori", "javascript:", "#"]
     u = url.lower()
-    if any(x in u for x in bad):
+    if any(x in u for x in ["javascript:", "#", "/search", "arama?", "filtre", "kategori", "assets", "/files/", "image", "img", ".jpg", ".jpeg", ".png", ".webp", ".svg"]):
         return False
-    if source == "sahibinden":
-        return "/ilan/" in u
-    if source == "arabam":
-        return "/ilan/" in u or bool(re.search(r"-[0-9]{6,}", u))
-    if source == "otoplus":
-        return bool(re.search(r"/[a-z0-9-]+-[0-9]{4}-", u)) or "sahibinden-" in u
-    if source == "otokoc":
-        return "/ikinci-el/" in u or bool(re.search(r"/[0-9]{5,}", u))
-    return bool(re.search(r"[0-9]{5,}", u))
 
+    # Her site için mümkün olduğunca gerçek ilan sayfası şartı.
+    if source == "sahibinden":
+        return "sahibinden.com/ilan/" in u
+    if source == "arabam":
+        return "arabam.com/ilan/" in u
+    if source == "letgo":
+        return "letgo.com/item/" in u and "imvm.letgo" not in u
+    if source == "facebook":
+        return "facebook.com/marketplace/item/" in u
+    if source == "vavacars":
+        return ("tr.vava.cars" in u and ("/ikinci-el-araba/" in u or "/buy-car/" in u or "/car/" in u))
+    if source == "otoplus":
+        # Kategori/filtre sayfası değil, genelde uzun ve ilan benzeri yol olsun.
+        return "otoplus.com" in u and ("/arac/" in u or "/ikinci-el/" in u or "/ilan/" in u) and bool(re.search(r"\d{4}|\d{5,}", u))
+    if source == "otokoc":
+        return "otokocikinciel.com" in u and ("/ikinci-el/" in u or bool(re.search(r"/\d{5,}", u)))
+    if source == "arabasepeti":
+        return "arabasepeti.com" in u and ("/ilan/" in u or "/arac/" in u or bool(re.search(r"\d{5,}", u)))
+    if source == "arabalar":
+        return "arabalar.com" in u and ("/ilan/" in u or "/satilik/" in u or bool(re.search(r"\d{5,}", u)))
+    return False
 
 def clean_title(s):
     s = BeautifulSoup(s or "", "html.parser").get_text(" ")
@@ -264,19 +334,49 @@ def parse_km(text):
     return None
 
 
+def gear_ok(item, t):
+    wanted = (t.get("gear") or "Farketmez").lower()
+    if wanted == "farketmez":
+        return True
+    blob = slug_tr(" ".join(str(item.get(k) or "") for k in ["title", "url", "raw"]))
+    auto_words = ["otomatik", "automatic", "dsg", "edc", "cvt", "tiptronic", "stronic", "s-tronic", "powershift", "auto"]
+    semi_words = ["yari-otomatik", "yarı-otomatik", "semi-automatic", "dsg", "edc", "cvt"]
+    manual_words = ["manuel", "manual", "duz-vites", "düz-vites"]
+    has_manual = any(slug_tr(w) in blob for w in manual_words)
+    has_auto = any(slug_tr(w) in blob for w in auto_words + semi_words)
+    if "manuel" in wanted:
+        return not has_auto and (has_manual or True)
+    if "otomatik" in wanted:
+        # Manuel olduğu açıkça yazıyorsa kesin reddet. Otomatik bilgisi yoksa kabul et, çünkü çoğu listede vites metni yok.
+        return not has_manual
+    if "yar" in wanted:
+        return not has_manual
+    return True
+
+
 def passes_filters(item, t):
-    title_blob = f"{item.get('title','')} {item.get('url','')}".lower()
-    if slug_tr(t.get("brand")) not in slug_tr(title_blob):
-        return False
+    blob = f"{item.get('title','')} {item.get('url','')} {item.get('raw','')}".lower()
+    slug_blob = slug_tr(blob)
+    brand_slug = slug_tr(t.get("brand"))
     model_slug = slug_tr(t.get("model"))
-    if model_slug and model_slug not in slug_tr(title_blob):
+    if brand_slug and brand_slug not in slug_blob:
         return False
+    if model_slug and model_slug not in slug_blob:
+        return False
+
     trim = t.get("trim") or ""
     if trim and trim != "Farketmez":
-        # trim token toleransı: hepsi değil, kritik tokenlardan biri yeterli olsun
-        tokens = [x for x in re.split(r"\s+", trim.lower()) if len(x) > 1 and x not in ["tsi", "tdi", "bmt"]]
-        if tokens and not any(slug_tr(tok) in slug_tr(title_blob) for tok in tokens[:3]):
-            pass
+        # Çok katı değil ama alakasız linkleri eleyecek kadar yeterli.
+        tokens = [slug_tr(x) for x in re.split(r"\s+", trim) if len(x) > 1]
+        strong = [x for x in tokens if x not in ["tsi", "tdi", "bmt", "eco", "vtec", "i"]]
+        # Comfortline/Elegance/R-Line gibi paket adı varsa metinde veya URL'de görünmeli.
+        package_tokens = [x for x in strong if not re.match(r"^\d", x)]
+        if package_tokens and not any(x in slug_blob for x in package_tokens):
+            return False
+
+    if not gear_ok(item, t):
+        return False
+
     price = item.get("price")
     if price:
         if t.get("price_min") and price < t["price_min"]: return False
@@ -293,7 +393,6 @@ def passes_filters(item, t):
         if slug_tr(city) not in slug_tr(item.get("city")):
             return False
     return True
-
 
 def fetch(url):
     headers = {
@@ -349,6 +448,7 @@ def parse_html_items(source, html, base_url, t):
             "year": parse_year(blob),
             "km": parse_km(blob),
             "city": extract_city(blob),
+            "raw": blob,
         }
         if item["url"] in seen:
             continue
@@ -369,7 +469,7 @@ def parse_text_items(source, text, t):
         if not is_detail_url(source, url) or bad_title(title):
             continue
         around = title + " " + text[max(0, text.find(url)-250): text.find(url)+250]
-        item = {"source": source, "title": title, "url": url.split("?")[0], "price": parse_price(around), "year": parse_year(around), "km": parse_km(around), "city": extract_city(around)}
+        item = {"source": source, "title": title, "url": url.split("?")[0], "price": parse_price(around), "year": parse_year(around), "km": parse_km(around), "city": extract_city(around), "raw": around}
         if item["url"] not in seen and passes_filters(item, t):
             seen.add(item["url"]); items.append(item)
         if len(items) >= MAX_ITEMS_PER_SOURCE:
@@ -385,7 +485,7 @@ def parse_text_items(source, text, t):
             title = guess_title_from_text(around, t)
             if bad_title(title):
                 continue
-            item = {"source": source, "title": title, "url": url.split("?")[0], "price": parse_price(around), "year": parse_year(around), "km": parse_km(around), "city": extract_city(around)}
+            item = {"source": source, "title": title, "url": url.split("?")[0], "price": parse_price(around), "year": parse_year(around), "km": parse_km(around), "city": extract_city(around), "raw": around}
             if passes_filters(item, t):
                 seen.add(url); items.append(item)
             if len(items) >= MAX_ITEMS_PER_SOURCE:
@@ -415,6 +515,10 @@ def source_check(source, t):
     status = []
     items = []
     url = list_url(source, t)
+
+    if source in OPEN_ONLY_SOURCES:
+        return [], "Bu kaynak uygulama içinde güvenilir ilan listesi vermiyor; sitede aç butonu kullanılır", url
+
     try:
         code, html, final_url = fetch(url)
         status.append(f"HTTP {code}")
@@ -422,11 +526,12 @@ def source_check(source, t):
             html_items = parse_html_items(source, html, final_url, t)
             status.append(f"html {len(html_items)}")
             items.extend(html_items)
-        elif code in (403, 410, 429):
+        elif code in (400, 403, 410, 429):
             status.append("doğrudan engel")
     except Exception as e:
         status.append(f"site hata: {type(e).__name__}")
-    # reader fallback
+
+    # Reader fallback: sadece gerçek ilan linki yakalarsa listeye alır.
     if len(items) < 2:
         try:
             rurl = reader_url(url)
@@ -439,8 +544,9 @@ def source_check(source, t):
                 status.append(f"reader {code}")
         except Exception as e:
             status.append(f"reader hata: {type(e).__name__}")
-    # search fallback
-    if len(items) < 2 and source not in ["facebook", "letgo"]:
+
+    # Search fallback: Letgo/Facebook kapalı; diğerlerinde sadece gerçek ilan URL'si yakalanır.
+    if len(items) < 2:
         try:
             surl = search_url(source, t)
             code, txt, _ = fetch(surl)
@@ -452,11 +558,16 @@ def source_check(source, t):
                 status.append(f"arama {code}")
         except Exception as e:
             status.append(f"arama hata: {type(e).__name__}")
-    # dedupe
+
     out = []
     seen = set()
     for it in items:
+        it["url"] = normalize_url(it.get("url"))
         if not is_detail_url(source, it.get("url")):
+            continue
+        if bad_title(it.get("title")):
+            continue
+        if not passes_filters(it, t):
             continue
         uid = make_uid(it)
         if uid in seen:
@@ -467,7 +578,6 @@ def source_check(source, t):
         if len(out) >= MAX_ITEMS_PER_SOURCE:
             break
     return out, " / ".join(status), url
-
 
 def make_uid(item):
     u = (item.get("url") or "").split("?")[0].rstrip("/")
@@ -653,8 +763,8 @@ def health():
 def reset_cache():
     return """<!doctype html><meta charset='utf-8'><script>
     if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister()))}
-    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=25&t='+Date.now());
-    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=25'>Aç</a>"""
+    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=26&t='+Date.now());
+    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=26'>Aç</a>"""
 
 
 @app.route("/reset-db")
