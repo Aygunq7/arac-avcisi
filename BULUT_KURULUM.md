@@ -1,4 +1,1 @@
-1. ZIP içindeki dosyaları mevcut GitHub reposuna yükle.
-2. Render > Manual Deploy > Clear build cache & deploy.
-3. Deploy sonrası /health adresinde version v30-filtreler-gercekten-aktif görünmeli.
-4. /reset-cache adresini aç.
+Render kurulumu: Dosyaları GitHub reposuna yükle, Render’da Clear build cache & deploy yap. /health içinde v31-akilli-filtre-sonuc-var görmelisin. Sonra /reset-cache aç.

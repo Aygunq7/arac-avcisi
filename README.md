@@ -1,3 +1,3 @@
-# Araç Avcısı v30
+Araç Avcısı v31
 
-Bu sürümde `Şimdi kontrol et` beyaz 500 ekranı düzeltildi. Kontrol arka planda başlar, kaynak hataları takip kartındaki durum alanına yazılır. Fiyat/yıl/km/vites/şehir filtreleri kesin uygulanır: kullanıcı filtre girdiyse o bilgi okunamayan ilan listeye alınmaz.
+Akıllı filtre modu eklendi. Fiyat/yıl/km okunursa filtre kesin uygulanır, bilgi okunamazsa ilan saklanır. Kesin mod seçilirse bilgi okunamayan ilan elenir.

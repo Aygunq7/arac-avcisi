@@ -15,7 +15,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, redirect, jsonify, url_for
 from apscheduler.schedulers.background import BackgroundScheduler
 
-VERSION = "v30-filtreler-gercekten-aktif"
+VERSION = "v31-akilli-filtre-sonuc-var"
 DATA_DIR = os.getenv("DATA_DIR", "data")
 DB_PATH = os.path.join(DATA_DIR, "arac_avcisi.db")
 DEFAULT_INTERVAL_HOURS = int(os.getenv("CHECK_INTERVAL_HOURS", "4") or 4)
@@ -26,7 +26,7 @@ MAX_ITEMS_PER_SOURCE = int(os.getenv("MAX_ITEMS_PER_SOURCE", "12") or 12)
 os.makedirs(DATA_DIR, exist_ok=True)
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "arac-avcisi-v30")
+app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "arac-avcisi-v31")
 
 BRANDS = {
     "Volkswagen": {
@@ -119,7 +119,7 @@ TRACK_COLUMNS = {
     "price_min": "INTEGER", "price_max": "INTEGER",
     "fuel": "TEXT DEFAULT 'Farketmez'", "gear": "TEXT DEFAULT 'Farketmez'", "sources": "TEXT DEFAULT '[]'",
     "interval_hours": "INTEGER DEFAULT 4", "notify_email": "TEXT DEFAULT ''", "telegram_chat_id": "TEXT DEFAULT ''",
-    "active": "INTEGER DEFAULT 1", "created_at": "TEXT", "updated_at": "TEXT",
+    "filter_mode": "TEXT DEFAULT 'dengeli'", "active": "INTEGER DEFAULT 1", "created_at": "TEXT", "updated_at": "TEXT",
     "last_check_at": "TEXT", "last_status": "TEXT DEFAULT ''", "item_count": "INTEGER DEFAULT 0"
 }
 LISTING_COLUMNS = {
@@ -167,7 +167,7 @@ def init_db():
         fuel TEXT, gear TEXT, sources TEXT,
         interval_hours INTEGER DEFAULT 4,
         notify_email TEXT, telegram_chat_id TEXT,
-        active INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT,
+        filter_mode TEXT DEFAULT 'dengeli', active INTEGER DEFAULT 1, created_at TEXT, updated_at TEXT,
         last_check_at TEXT, last_status TEXT DEFAULT '', item_count INTEGER DEFAULT 0
     )""")
     cur.execute("""CREATE TABLE IF NOT EXISTS listings(
@@ -401,10 +401,14 @@ def parse_km(text):
 
 
 
-def fuel_ok(item, t):
+def filter_mode(t):
+    return (t.get("filter_mode") or "dengeli").lower()
+
+
+def fuel_state(item, t):
     wanted = (t.get("fuel") or "Farketmez").lower()
     if wanted == "farketmez":
-        return True
+        return "match"
     blob = slug_tr(" ".join(str(item.get(k) or "") for k in ["title", "url", "raw"]))
     fuel_map = {
         "benzin": ["benzin", "gasoline", "petrol"],
@@ -414,15 +418,24 @@ def fuel_ok(item, t):
         "hibrit": ["hibrit", "hybrid"],
         "elektrik": ["elektrik", "electric"]
     }
-    keys = fuel_map.get(wanted, [wanted])
-    # Yakıt seçildiyse bilgi yoksa kabul etme. Böylece filtre gerçekten çalışır.
-    return any(slug_tr(k) in blob for k in keys)
+    all_known = {w for vals in fuel_map.values() for w in vals}
+    wanted_keys = fuel_map.get(wanted, [wanted])
+    if any(slug_tr(k) in blob for k in wanted_keys):
+        return "match"
+    if any(slug_tr(k) in blob for k in all_known):
+        return "mismatch"
+    return "unknown"
 
 
-def gear_ok(item, t):
+def fuel_ok(item, t):
+    st = fuel_state(item, t)
+    return st == "match" or (st == "unknown" and filter_mode(t) != "kesin")
+
+
+def gear_state(item, t):
     wanted = (t.get("gear") or "Farketmez").lower()
     if wanted == "farketmez":
-        return True
+        return "match"
     blob = slug_tr(" ".join(str(item.get(k) or "") for k in ["title", "url", "raw"]))
     auto_words = ["otomatik", "automatic", "dsg", "edc", "cvt", "tiptronic", "stronic", "s-tronic", "powershift", "auto", "at", "bva"]
     semi_words = ["yari-otomatik", "yarı-otomatik", "semi-automatic", "dsg", "edc", "cvt"]
@@ -430,15 +443,29 @@ def gear_ok(item, t):
     has_manual = any(slug_tr(w) in blob for w in manual_words)
     has_auto = any(slug_tr(w) in blob for w in auto_words + semi_words)
     if "manuel" in wanted:
-        # Manuel seçildiyse otomatik kelimesi geçen ilanı reddet, manuel bilgisi yoksa da reddet.
-        return has_manual and not has_auto
+        if has_manual and not has_auto:
+            return "match"
+        if has_auto:
+            return "mismatch"
+        return "unknown"
     if "yar" in wanted:
-        # Yarı otomatik seçildiyse DSG/EDC/CVT vb. açıkça görünmeli.
-        return any(slug_tr(w) in blob for w in semi_words) and not has_manual
+        if any(slug_tr(w) in blob for w in semi_words) and not has_manual:
+            return "match"
+        if has_manual:
+            return "mismatch"
+        return "unknown"
     if "otomatik" in wanted:
-        # Otomatik seçildiyse manuel olanları ve vites bilgisi okunamayanları reddet.
-        return has_auto and not has_manual
-    return True
+        if has_auto and not has_manual:
+            return "match"
+        if has_manual:
+            return "mismatch"
+        return "unknown"
+    return "match"
+
+
+def gear_ok(item, t):
+    st = gear_state(item, t)
+    return st == "match" or (st == "unknown" and filter_mode(t) != "kesin")
 
 
 def filter_reason(item, t):
@@ -454,52 +481,62 @@ def filter_reason(item, t):
     if model_slug and model_slug not in slug_blob:
         return False, "model eşleşmedi"
 
+    strict = filter_mode(t) == "kesin"
     trim = t.get("trim") or ""
     if trim and trim != "Farketmez":
         tokens = [slug_tr(x) for x in re.split(r"\s+", trim) if len(x) > 1]
-        # Paket/motor için en az paket adı veya motor kodu görünmeli.
         important = [x for x in tokens if x not in ["bmt", "eco", "i", "ve", "and"]]
         if important:
             missing = [x for x in important if x not in slug_blob]
-            # 1.4 / 1.5 gibi motor hacmini bazen URL 14 diye taşır; hepsi eksikse reddet.
-            if len(missing) == len(important):
+            # Dengeli modda paket bilgisi okunamazsa ilanı tamamen çöpe atma.
+            # Ama açıkça başka paket görünürse yine elenir.
+            known_packages = ["comfortline", "highline", "trendline", "elegance", "executive", "r-line", "joy", "touch", "icon", "style", "elite", "premium"]
+            visible_pkg = any(p in slug_blob for p in known_packages)
+            if len(missing) == len(important) and (strict or visible_pkg):
                 return False, "paket/motor eşleşmedi"
 
     if not gear_ok(item, t):
-        return False, "vites uymadı veya okunamadı"
+        return False, "vites uymadı" if filter_mode(t) != "kesin" else "vites uymadı veya okunamadı"
     if not fuel_ok(item, t):
-        return False, "yakıt uymadı veya okunamadı"
+        return False, "yakıt uymadı" if filter_mode(t) != "kesin" else "yakıt uymadı veya okunamadı"
 
     price = item.get("price")
     if t.get("price_min") or t.get("price_max"):
         if price is None:
-            return False, "fiyat okunamadı"
-        if t.get("price_min") and price < t["price_min"]:
-            return False, "fiyat düşük"
-        if t.get("price_max") and price > t["price_max"]:
-            return False, "fiyat yüksek"
+            if strict:
+                return False, "fiyat okunamadı"
+        else:
+            if t.get("price_min") and price < t["price_min"]:
+                return False, "fiyat düşük"
+            if t.get("price_max") and price > t["price_max"]:
+                return False, "fiyat yüksek"
 
     year = item.get("year")
     if t.get("year_min") or t.get("year_max"):
         if year is None:
-            return False, "yıl okunamadı"
-        if t.get("year_min") and year < t["year_min"]:
-            return False, "yıl düşük"
-        if t.get("year_max") and year > t["year_max"]:
-            return False, "yıl yüksek"
+            if strict:
+                return False, "yıl okunamadı"
+        else:
+            if t.get("year_min") and year < t["year_min"]:
+                return False, "yıl düşük"
+            if t.get("year_max") and year > t["year_max"]:
+                return False, "yıl yüksek"
 
     km = item.get("km")
     if t.get("km_max"):
         if km is None:
-            return False, "km okunamadı"
-        if km > t["km_max"]:
-            return False, "km yüksek"
+            if strict:
+                return False, "km okunamadı"
+        else:
+            if km > t["km_max"]:
+                return False, "km yüksek"
 
     city = t.get("city")
     if city and city != "Tüm Türkiye":
         if not item.get("city"):
-            return False, "şehir okunamadı"
-        if slug_tr(city) not in slug_tr(item.get("city")):
+            if strict:
+                return False, "şehir okunamadı"
+        elif slug_tr(city) not in slug_tr(item.get("city")):
             return False, "şehir uymadı"
     return True, "uygun"
 
@@ -733,6 +770,8 @@ def row_to_track(row):
         d["sources"] = json.loads(d.get("sources") or "[]")
     except Exception:
         d["sources"] = []
+    if not d.get("filter_mode"):
+        d["filter_mode"] = "dengeli"
     return d
 
 
@@ -860,11 +899,11 @@ def create():
         name = (f.get("name") or f"{brand} {model} {trim if trim!='Farketmez' else ''}".strip()).strip()
         sources = f.getlist("sources") or ["arabam"]
         data = (
-            name, brand, model, trim, f.get("city") or "Tüm Türkiye", as_int(f.get("year_min")), as_int(f.get("year_max")), as_int(f.get("km_max")), as_int(f.get("price_min")), as_int(f.get("price_max")), f.get("fuel") or "Farketmez", f.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), as_int(f.get("interval_hours"), DEFAULT_INTERVAL_HOURS), f.get("notify_email") or "", f.get("telegram_chat_id") or "", 1, now_iso(), now_iso()
+            name, brand, model, trim, f.get("city") or "Tüm Türkiye", as_int(f.get("year_min")), as_int(f.get("year_max")), as_int(f.get("km_max")), as_int(f.get("price_min")), as_int(f.get("price_max")), f.get("fuel") or "Farketmez", f.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), as_int(f.get("interval_hours"), DEFAULT_INTERVAL_HOURS), f.get("notify_email") or "", f.get("telegram_chat_id") or "", f.get("filter_mode") or "dengeli", 1, now_iso(), now_iso()
         )
         con = db(); cur = con.cursor()
-        cur.execute("""INSERT INTO tracks(name,brand,model,trim,city,year_min,year_max,km_max,price_min,price_max,fuel,gear,sources,interval_hours,notify_email,telegram_chat_id,active,created_at,updated_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
+        cur.execute("""INSERT INTO tracks(name,brand,model,trim,city,year_min,year_max,km_max,price_min,price_max,fuel,gear,sources,interval_hours,notify_email,telegram_chat_id,filter_mode,active,created_at,updated_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
         tid = cur.lastrowid
         con.commit(); con.close()
         background_check(tid)
@@ -879,10 +918,10 @@ def create():
             trim = (f.get("trim_custom") or f.get("trim") or "Farketmez").strip() or "Farketmez"
             name = (f.get("name") or f"{brand} {model} {trim if trim!='Farketmez' else ''}".strip()).strip()
             sources = f.getlist("sources") or ["arabam"]
-            data = (name, brand, model, trim, f.get("city") or "Tüm Türkiye", as_int(f.get("year_min")), as_int(f.get("year_max")), as_int(f.get("km_max")), as_int(f.get("price_min")), as_int(f.get("price_max")), f.get("fuel") or "Farketmez", f.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), as_int(f.get("interval_hours"), DEFAULT_INTERVAL_HOURS), f.get("notify_email") or "", f.get("telegram_chat_id") or "", 1, now_iso(), now_iso())
+            data = (name, brand, model, trim, f.get("city") or "Tüm Türkiye", as_int(f.get("year_min")), as_int(f.get("year_max")), as_int(f.get("km_max")), as_int(f.get("price_min")), as_int(f.get("price_max")), f.get("fuel") or "Farketmez", f.get("gear") or "Farketmez", json.dumps(sources, ensure_ascii=False), as_int(f.get("interval_hours"), DEFAULT_INTERVAL_HOURS), f.get("notify_email") or "", f.get("telegram_chat_id") or "", f.get("filter_mode") or "dengeli", 1, now_iso(), now_iso())
             con = db(); cur = con.cursor()
-            cur.execute("""INSERT INTO tracks(name,brand,model,trim,city,year_min,year_max,km_max,price_min,price_max,fuel,gear,sources,interval_hours,notify_email,telegram_chat_id,active,created_at,updated_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
+            cur.execute("""INSERT INTO tracks(name,brand,model,trim,city,year_min,year_max,km_max,price_min,price_max,fuel,gear,sources,interval_hours,notify_email,telegram_chat_id,filter_mode,active,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", data)
             tid = cur.lastrowid
             con.commit(); con.close()
             background_check(tid)
@@ -915,7 +954,7 @@ def check(track_id):
     except Exception:
         pass
     background_check(track_id)
-    return redirect(url_for("index", v="29", checking=track_id))
+    return redirect(url_for("index", v="31", checking=track_id))
 
 
 @app.route("/delete/<int:track_id>", methods=["POST"])
@@ -949,8 +988,8 @@ def health():
 def reset_cache():
     return """<!doctype html><meta charset='utf-8'><script>
     if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(rs=>rs.forEach(r=>r.unregister()))}
-    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=30&t='+Date.now());
-    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=30'>Aç</a>"""
+    caches && caches.keys().then(keys=>keys.forEach(k=>caches.delete(k))).finally(()=>location.href='/?v=31&t='+Date.now());
+    </script><h2>Önbellek temizleniyor...</h2><a href='/?v=31'>Aç</a>"""
 
 
 @app.route("/reset-db")
